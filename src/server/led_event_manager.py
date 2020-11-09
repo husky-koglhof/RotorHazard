@@ -134,6 +134,14 @@ class ColorPattern:
     TWO_OUT_OF_THREE = [2, 1]
     MOD_SEVEN = [1, 6]
     FOUR_ON_FOUR_OFF = [4, 4]
+    ''' husky-koglhof '''
+    ''' only works with 5 led rings with 12 elements '''
+    ''' 60 elements '''
+    ONE = [12, 48]
+    TWO = [24, 36]
+    THREE = [36, 24]
+    FOUR = [48, 12]
+    FIVE = [60, 0]
 
 class LEDEvent:
     NOCONTROL = 'noControlDisplay'

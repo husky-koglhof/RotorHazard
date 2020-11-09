@@ -168,6 +168,98 @@ def colorWipe(args):
         strip.show()
         gevent.sleep(a['speedDelay']/1000.0)
 
+def colorWiper(args):
+    gevent.idle() # never time-critical
+
+    if 'strip' in args:
+        strip = args['strip']
+    else:
+        return False
+
+    a = {
+        'color': ColorVal.WHITE,
+        'speedDelay': 256,
+        'iterations': 1,
+    }
+    a.update(args)
+
+    a['speedDelay'] = a['speedDelay']/float(strip.numPixels()) # scale effect by strip length
+
+    for p in range(a['iterations']):
+        for i in range(strip.numPixels()):
+            strip.setPixelColor(i, a['color'])
+            strip.show()
+            gevent.sleep(a['speedDelay']/1000.0)
+
+        for i in range(strip.numPixels()):
+            strip.setPixelColor(i, ColorVal.NONE)
+            strip.show()
+            gevent.sleep(a['speedDelay']/1000.0)
+
+def fadeRepeat(args):
+    if 'strip' in args:
+        strip = args['strip']
+    else:
+        return False
+
+    a = {
+        'color': ColorVal.WHITE,
+        'pattern': ColorPattern.SOLID,
+        'steps': 25,
+        'speedDelay': 10,
+        'onTime': 250,
+        'offTime': 250,
+        'iterations': 1,
+        'repeat': 1,
+        'repeatTime': 0
+    }
+    a.update(args)
+
+    led_off(strip)
+
+    if 'outSteps' not in a:
+        a['outSteps'] = a['steps']
+
+    # effect should never exceed 3Hz (prevent seizures)
+    a['offTime'] = min(333-((a['steps']*a['speedDelay'])+(a['outSteps']*a['speedDelay'])+a['onTime']), a['offTime'])
+
+    for i in range(a['repeat']):
+        for i in range(a['iterations']):
+            # fade in
+            if a['steps']:
+                led_off(strip)
+                gevent.idle() # never time-critical
+                for j in range(0, a['steps'], 1):
+                    c = dim(a['color'], j/float(a['steps']))
+                    led_on(strip, c, a['pattern'])
+                    strip.show()
+                    gevent.sleep(a['speedDelay']/1000.0);
+                else:
+                    led_on(strip, a['color'], a['pattern'])
+
+                led_on(strip, a['color'], a['pattern'])
+                gevent.sleep(a['onTime']/1000.0);
+
+            # fade out
+            if a['outSteps']:
+                led_on(strip, a['color'], a['pattern'])
+                for j in range(a['outSteps'], 0, -1):
+                    c = dim(a['color'], j/float(a['outSteps']))
+                    led_on(strip, c, a['pattern'])
+                    strip.show()
+                    gevent.sleep(a['speedDelay']/1000.0);
+
+                else:
+                    led_off(strip)
+
+                led_off(strip)
+
+            gevent.sleep(a['offTime']/1000.0);
+        led_off(strip)
+        gevent.sleep(a['repeatTime']/2000.0);
+        led_off(strip)
+        gevent.sleep(a['repeatTime']/2000.0);
+
 def fade(args):
     if 'strip' in args:
         strip = args['strip']
@@ -379,6 +471,54 @@ def discover(*args, **kwargs):
         'time': Timing.VTX_EXPIRE
         }),
 
+    LEDEffect("oneRing", "One Ring", showColor, [Evt.TRAFFIC_LIGHT], {
+        'color': ColorVal.RED,
+        'pattern': ColorPattern.ONE
+        }),
+    LEDEffect("twoRings", "Two Rings", showColor, [Evt.TRAFFIC_LIGHT], {
+        'color': ColorVal.RED,
+        'pattern': ColorPattern.TWO
+        }),
+    LEDEffect("threeRings", "Three Rings", showColor, [Evt.TRAFFIC_LIGHT], {
+        'color': ColorVal.RED,
+        'pattern': ColorPattern.THREE
+        }),
+    LEDEffect("fourRings", "Four Rings", showColor, [Evt.TRAFFIC_LIGHT], {
+        'color': ColorVal.RED,
+        'pattern': ColorPattern.FOUR
+        }),
+    LEDEffect("fiveRings", "Five Rings", showColor, [Evt.TRAFFIC_LIGHT], {
+        'color': ColorVal.RED,
+        'pattern': ColorPattern.FIVE
+        }),
+    LEDEffect("warning", "Warning", fade, [Evt.RACE_STAGE, Evt.STARTUP], {
+        'color': ColorVal.YELLOW,
+        'pattern': ColorPattern.SOLID,
+        'steps': 1,
+        'speedDelay': 200,
+        'onTime': 200,
+        'offTime': 200,
+        'iterations': 50
+        }),
+    LEDEffect("paceCar", "Pace Car", fadeRepeat, [Evt.TRAFFIC_LIGHT], {
+        'color': ColorVal.YELLOW,
+        'pattern': ColorPattern.SOLID,
+        'steps': 40,
+        'outSteps': 40,
+        'speedDelay': 1,
+        'onTime': 40,
+        'offTime': 40,
+        'iterations': 2,
+        'repeat': 90,
+        'repeatTime': 1000
+        }),
+    LEDEffect("stripChaseLong", "Chase Pattern 1-2 long", chase, [Evt.RACE_FINISH, Evt.RACE_STOP], {
+        'color': ColorVal.GREEN,
+        'pattern': ColorPattern.ONE_OF_THREE,
+        'speedDelay': 100,
+        'iterations': 15,
+        'offWhenDone': True
+        }),
 
     # register specific items needed for typical events
     LEDEffect("stripColorOrange2_1", "Pattern 2-1 / Orange", showColor, [Evt.STARTUP, Evt.RACE_STAGE, Evt.RACE_START, Evt.RACE_FINISH, Evt.RACE_STOP, Evt.LAPS_CLEAR, Evt.SHUTDOWN], {
@@ -418,6 +558,13 @@ def discover(*args, **kwargs):
     LEDEffect("stripWipe", "Wipe", colorWipe, [Evt.STARTUP, Evt.RACE_STAGE, Evt.CROSSING_ENTER, Evt.CROSSING_EXIT, Evt.RACE_START, Evt.RACE_FINISH, Evt.RACE_STOP, Evt.LAPS_CLEAR], {
         'color': ColorVal.WHITE,
         'speedDelay': 3,
+        }),
+
+    # wiper
+    LEDEffect("stripWiper", "Wiper", colorWiper, [Evt.STARTUP, Evt.RACE_STAGE, Evt.CROSSING_ENTER, Evt.CROSSING_EXIT, Evt.RACE_START, Evt.RACE_FINISH, Evt.RACE_STOP, Evt.LAPS_CLEAR], {
+        'color': ColorVal.WHITE,
+        'speedDelay': 600,
+        'iterations': 10,
         }),
 
     # fade

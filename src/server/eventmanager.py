@@ -140,5 +140,7 @@ class Evt:
     LED_SET_MANUAL = 'LedSetManual'
     # VRX Controller
     VRX_DATA_RECEIVE = 'VrxDataRecieve'
+    # RC-Car Traffic Light
+    TRAFFIC_LIGHT = 'trafficLight'
 
 

@@ -17,6 +17,7 @@ LOGGING = {}
 VRX_CONTROL = {}
 
 # LED strip configuration:
+LED['LED_SERVER']     = '127.0.0.1'
 LED['LED_COUNT']      = 0       # Number of LED pixels.
 LED['LED_PIN']        = 10      # GPIO pin connected to the pixels (10 uses SPI /dev/spidev0.0).
 LED['LED_FREQ_HZ']    = 800000  # LED signal frequency in hertz (usually 800khz)

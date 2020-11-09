@@ -358,6 +358,28 @@ def render_results():
     '''Route to round summary page.'''
     return render_template('results.html', serverInfo=serverInfo, getOption=Options.get, __=__, Debug=Config.GENERAL['DEBUG'])
 
+# husky-koglhof
+@APP.route('/racemgmt')
+def racemgmt():
+    '''Route to race management page.'''
+    frequencies = [node.frequency for node in INTERFACE.nodes]
+    nodes = []
+    for idx, freq in enumerate(frequencies):
+        if freq:
+            nodes.append({
+                'freq': freq,
+                'index': idx
+            })
+
+    return render_template('racemanagement.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+        led_enabled=led_manager.isEnabled(),
+        vrx_enabled=vrx_controller!=None,
+        num_nodes=RACE.num_nodes,
+        current_heat=RACE.current_heat, pilots=Database.Pilot,
+        nodes=nodes,
+        cluster_has_slaves=(CLUSTER and CLUSTER.hasSlaves()))
+
+@APP.route('/race')
 @APP.route('/run')
 @requires_auth
 def render_run():
@@ -1506,6 +1528,10 @@ def on_set_profile(data, emit_vals=True):
         hardware_set_all_enter_ats(enter_ats)
         hardware_set_all_exit_ats(exit_ats)
 
+        # husky-koglhof
+        if RACE.race_status == RaceStatus.READY: # only initiate staging if ready
+            clear_laps() # Clear laps before race start
+            emit_current_leaderboard() # Race page, blank leaderboard to the web client
     else:
         logger.warning('Invalid set_profile value: ' + str(profile_val))
 
@@ -2082,7 +2108,26 @@ def on_schedule_race(data):
         'scheduled_at': RACE.scheduled_time
         })
 
-    emit_priority_message(__("Next race begins in {0:01d}:{1:02d}".format(data['m'], data['s'])), True)
+    # husky-koglhof
+    if data['s'] == 0:
+        if data['m'] == 1:
+            emit_priority_message(__("Next race begins in 1 minute"), True)
+        else:
+            emit_priority_message(__("Next race begins in {0:01d} minutes").format(data['m']), True)
+    elif data['s'] == 1:
+        if data['m'] == 1:
+            emit_priority_message(__("Next race begins in 1 minute and 1 second"), True)
+        elif data['m'] == 0:
+            emit_priority_message(__("Next race begins in 1 second"), True)
+        else:
+            emit_priority_message(__("Next race begins in {0:01d} minutes {1:01d} second").format(data['m'], data['s']), True)
+    else:
+        if data['m'] == 0:
+            emit_priority_message(__("Next race begins in {0:01d} seconds").format(data['s']), True)
+        elif data['m'] == 1:
+            emit_priority_message(__("Next race begins in 1 minute {0:01d} seconds").format(data['s']), True)
+        else:
+            emit_priority_message(__("Next race begins in {0:01d} minutes {1:01d} seconds").format(data['m'], data['s']), True)
 
 @SOCKET_IO.on('cancel_schedule_race')
 @catchLogExceptionsWrapper
@@ -2174,6 +2219,8 @@ def on_stage_race():
         RACE.start_token = random.random()
         gevent.spawn(race_start_thread, RACE.start_token)
 
+        # husky-koglhof
+        gevent.spawn(traffic_light_thread_function)
         SOCKET_IO.emit('stage_ready', {
             'hide_stage_timer': MIN != MAX,
             'delay': RACE.start_time_delay_secs,
@@ -2368,6 +2415,8 @@ def race_expire_thread(start_token):
             RACE.timer_running = False # indicate race timer no longer running
             trigger_event(Evt.RACE_FINISH)
             check_win_condition(RACE, INTERFACE, at_finish=True, start_token=start_token)
+            # husky-koglhof
+            on_stop_race()
         else:
             logger.debug("Finished unused race-time-expire thread")
 
@@ -3754,6 +3803,10 @@ def emit_heat_data(**params):
         emit('heat_data', emit_payload, broadcast=True, include_self=False)
     else:
         SOCKET_IO.emit('heat_data', emit_payload)
+    # husky-koglhof
+    if RACE.race_status == RaceStatus.READY: # only initiate staging if ready
+        clear_laps()
+        emit_current_leaderboard() # Race page, blank leaderboard to the web client
 
 def emit_class_data(**params):
     '''Emits class data.'''
@@ -4115,6 +4168,39 @@ def emit_pass_record(node, lap_time_stamp):
 # Program Functions
 #
 
+# husky-koglhof
+def traffic_light_thread_function():
+    args = None
+    if led_manager.isEnabled() and (RACE.start_time_delay_secs+0.1) > 5:
+        gevent.sleep((RACE.start_time_delay_secs+0.1)-6)
+
+        while True:
+            # Sleep all seconds upper 5 secs
+            # only start these loop if lower 6 secs
+            gevent.sleep(1)
+            if RACE.race_status == RaceStatus.STAGING:  # if race is in progress
+                traffic_light_thread_function.iter_tracker += 1
+                if traffic_light_thread_function.iter_tracker == 1:
+                    led_manager.setEventEffect(Evt.LED_MANUAL, 'oneRing')
+                elif traffic_light_thread_function.iter_tracker == 2:
+                    led_manager.setEventEffect(Evt.LED_MANUAL, 'twoRings')
+                elif traffic_light_thread_function.iter_tracker == 3:
+                    led_manager.setEventEffect(Evt.LED_MANUAL, 'threeRings')
+                elif traffic_light_thread_function.iter_tracker == 4:
+                    led_manager.setEventEffect(Evt.LED_MANUAL, 'fourRings')
+                elif traffic_light_thread_function.iter_tracker == 5:
+                    led_manager.setEventEffect(Evt.LED_MANUAL, 'fiveRings')
+                else:
+                    traffic_light_thread_function.iter_tracker = 0
+                    return False
+            else:
+                traffic_light_thread_function.iter_tracker = 0
+                return False
+
+            trigger_event(Evt.LED_MANUAL, args)
+
+traffic_light_thread_function.iter_tracker = 0
+
 def heartbeat_thread_function():
     '''Allow time for connection handshake to terminate before emitting data'''
     gevent.sleep(0.010)
@@ -4401,19 +4487,24 @@ def check_win_condition(RACE, INTERFACE, **kwargs):
                 if len(win_phon_name) <= 0:  # if no phonetic then use callsign
                     win_phon_name = win_status['data']['callsign']
                 emit_phonetic_text(__('Winner is') + ' ' + win_phon_name, 'race_winner')
+            # husky-koglhof
+            on_stop_race()
         elif win_status['status'] == WinStatus.TIE:
             # announce tied
             if win_status['status'] != previous_win_status:
                 RACE.status_message = __('Race Tied')
                 emit_race_status_message()
                 emit_phonetic_text(RACE.status_message, 'race_winner')
+                # husky-koglhof
+                on_stop_race()
         elif win_status['status'] == WinStatus.OVERTIME:
             # announce overtime
             if win_status['status'] != previous_win_status:
                 RACE.status_message = __('Race Tied: Overtime')
                 emit_race_status_message()
                 emit_phonetic_text(RACE.status_message, 'race_winner')
-
+                # husky-koglhof
+                on_stop_race()
         if 'max_consideration' in win_status:
             logger.debug("Waiting {0}ms to declare winner.".format(win_status['max_consideration']))
             gevent.sleep(win_status['max_consideration'] / 1000)

@@ -1294,6 +1294,7 @@ jQuery(document).ready(function($){
 	// popup messaging
 	socket.on('priority_message', function (msg) {
 		if (msg.interrupt) {
+			speak('<div>' + msg.message + '</div>', true);
 			interrupt_message_queue.push(msg.message);
 			if (interrupt_message_queue.length == 1) {
 				get_interrupt_message()
