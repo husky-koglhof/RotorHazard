@@ -76,24 +76,35 @@
 				<li><a href="/event">{{ __("Event") }}</a></li>
 				<li><a href="/results">{{ __("Results") }}</a></li>
 				<li><a href="/current">{{ __("Current") }}</a></li>
-				<li class="admin-hide"><a href="/run">{{ __("Run") }}</a></li>
-				<li class="admin-hide"><a href="/marshal">{{ __("Marshal") }}</a></li>
-				<li class="admin-hide"><a href="/settings">{{ __("Settings") }}</a></li>
+				{% if user.is_authenticated and user.has_permission('admin') %}
+					<li><a href="/run">{{ __("Run") }}</a></li>
+					<li><a href="/marshal">{{ __("Marshal") }}</a></li>
+					<li><a href="/settings">{{ __("Settings") }}</a></li>
+				{% endif %}
 				<li class="extra">
 					<a href="#">...</a>
 					<ul>
 						<li><a href="/docs?d=README.md">{{ __("Documentation") }}</a></li>
-
+						{% if user.is_authenticated and user.has_permission('monitor') %}
 						<li><a href="/streams">{{ __("Stream Displays") }}</a></li>
-
+						{% endif %}
 						<li><a href="/imdtabler">{{ __("IMDTabler") }}</a></li>
 
-						{% if Debug %}<li><a href="/scanner">{{ __("Band Scanner") }}</a></li>{% endif %}
-
-						<li><a href="/hardwarelog" class="admin-hide">{{ __('View Server Log') }}</a></li>
+						{% if user.is_authenticated and user.has_permission('admin') %}
+							{% if Debug %}<li><a href="/scanner">{{ __("Band Scanner") }}</a></li>{% endif %}
+							<li><a href="/hardwarelog">{{ __('View Server Log') }}</a></li>
+						{% endif %}
 
 						<li><a href="https://github.com/RotorHazard/RotorHazard/" target="_blank">{{ __("RotorHazard on GitHub") }} &#10132;&#xFE0E;</a></li>
 						<li><a href="#about" class="open-mfp-popup">{{ __("About RotorHazard") }}</a></li>
+						{% if user.is_authenticated %}
+							<li><a href="/profile">{{ __("Show Profile") }}</a></li>
+							{% if not user.has_permission('guest') %}
+							<li><a href="{{ url_for_security('logout') }}{% if 'next' in request.args %}?next={{ request.args.next|urlencode }}{% endif %}">{{ _fsdomain('Logout') }}</a></li>
+							{% endif %}
+						{% else %}
+							<li><a href="{{ url_for_security('login') }}{% if 'next' in request.args %}?next={{ request.args.next|urlencode }}{% endif %}">{{ _fsdomain('Login') }}</a></li>
+						{% endif %}
 					</ul>
 				</li>
 			</ul>

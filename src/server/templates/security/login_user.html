@@ -1,0 +1,52 @@
+{% extends "layout.html" %} {% block title %}Run{% endblock %}{% block head %}
+{% include "security/base.html" %}
+
+{% block pagestyles %}
+  <link href="{{ url_for('static', filename='security/css/account.css') }}" rel="stylesheet" type="text/css">
+{% endblock %}
+
+{% endblock %} {% block content %}
+<div class="login-page">
+<div class="form-wrapper">
+
+  <div class="logo">
+    <img src="../static/image/RotorHazard Icon.svg">
+  </div>
+  {% for message in get_flashed_messages() %}
+  <div class="alert alert-warning">
+    <button type="button" class="close" data-dismiss="alert">&times;</button>
+    {{ message }}
+  </div>
+  {% endfor %}
+<h1>Log In</h1>
+
+<form method="POST" action="/login">
+  {{ login_user_form.csrf_token }}
+
+  <fieldset class="email">
+    <label class="label">Username</label>
+    {{ login_user_form.name }}
+</fieldset>
+
+  <fieldset class="password">
+    <label class="label">Password</label>
+    {{ login_user_form.password }}
+  </fieldset>
+
+  <div class="submit-button">
+    {{ login_user_form.submit }}
+  </div>
+
+  <div class="login-signup">
+    <span>Don't have an account? <a href="{{ url_for('security.register') }}">Sign up.</a></span>
+  </div>
+  <!--
+  <div class="login-signup">
+    <span>Forgot Password? <a href="{{ url_for('security.register') }}">Recover it.</a></span>
+  </div>
+  -->
+</form>
+</div>
+</div>
+<!--{% include "security/_menu.html" %}-->
+{% endblock %}

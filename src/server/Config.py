@@ -43,6 +43,8 @@ GENERAL['SLAVES'] = []
 GENERAL['SLAVE_TIMEOUT'] = 300 # seconds
 GENERAL['DEBUG'] = False
 GENERAL['CORS_ALLOWED_HOSTS'] = '*'
+GENERAL['EXTENDED_AUTH'] = False
+GENERAL['SALT'] = ""
 
 InitResultStr = None
 InitResultLogLevel = logging.INFO

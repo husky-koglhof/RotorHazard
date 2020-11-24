@@ -1,5 +1,5 @@
 '''RotorHazard server script'''
-RELEASE_VERSION = "2.3.0-dev.8" # Public release version code
+RELEASE_VERSION = "2.3.0-dev.10" # Public release version code
 SERVER_API = 29 # Server API version
 NODE_API_SUPPORTED = 18 # Minimum supported node version
 NODE_API_BEST = 25 # Most recent node API
@@ -13,6 +13,104 @@ import logging
 import log
 from datetime import datetime
 from monotonic import monotonic
+
+# husky-koglhof add authentication technology
+from flask_security import (
+    Security,
+    SQLAlchemyUserDatastore,
+    auth_required,
+    roles_required,
+    current_user,
+    hash_password,
+    permissions_accepted,
+    permissions_required,
+    roles_accepted,
+    RoleMixin,
+    LoginForm,
+    RegisterForm,
+)
+from flask_security.forms import get_form_field_label, Required, password_required
+from flask_security.utils import get_message, default_password_validator, encrypt_password, config_value
+from flask_security.models import fsqla_v2 as fsqla
+from flask_security.confirmable import requires_confirmation, confirm_user
+from flask import request, flash
+from wtforms import (
+    StringField,
+    PasswordField,
+    ValidationError,
+)
+
+user_required = Required(message='USERNAME_NOT_PROVIDED')
+
+def unique_username(form, field):
+    user_ = user_datastore.find_user(username=field.data)
+    if user_ is not None:
+        # msg = get_message("USERNAME_ALREADY_ASSOCIATED", user=field.data)[0]
+        msg = __('Username ' + str(user_.username) + ' already associated')
+        # msg = get_message("EMAIL_ALREADY_ASSOCIATED", email=field.data)[0]
+        raise ValidationError(msg)
+
+class UniqueUsernameFormMixin:
+    username = StringField(
+        get_form_field_label("username"),
+        validators=[unique_username],
+    )
+
+class RHRegisterForm(RegisterForm):
+    '''The signup form'''
+    email = StringField(get_form_field_label("username"))
+    username = StringField(get_form_field_label("username"), validators=[user_required])
+    password = PasswordField(get_form_field_label("password"), validators=[password_required])
+    password_confirm = PasswordField(get_form_field_label("password_confirm"), validators=[password_required])
+
+    def validate(self):
+        if self.password_confirm.data != self.password.data:
+            msg = __("Passwords do not match")
+            flash(msg)
+            return False
+        user_ = user_datastore.find_user(username=self.username.data)
+        if user_ is not None:
+            msg = __('Username ' + str(user_.username) + ' already associated')
+            flash(msg)
+            return False
+        if not super(RHRegisterForm, self).validate():
+            return False
+        return True
+
+class RHLoginForm(LoginForm):
+    """The login form"""
+
+    name = StringField(get_form_field_label("name"), validators=[user_required])
+
+    def validate(self):
+        for user in user_datastore.user_model.query.all():
+            if user.username == self.name.data:
+                self.user = user
+                break
+        self.user = user_datastore.find_user(username=self.name.data)
+        if self.user is None:
+            flash(get_message("USER_DOES_NOT_EXIST")[0])
+            # Reduce timing variation between existing and non-existing users
+            hash_password(self.password.data)
+            return False
+        if not self.user.password:
+            flash(get_message("PASSWORD_NOT_SET")[0])
+            # Reduce timing variation between existing and non-existing users
+            hash_password(self.password.data)
+            return False
+        if not self.user.verify_and_update_password(self.password.data):
+            flash(get_message("INVALID_PASSWORD")[0])
+            return False
+        # admin user didn't need confirmation
+        if self.user.id > 1:
+            if requires_confirmation(self.user):
+                flash(get_message("CONFIRMATION_REQUIRED")[0])
+                return False
+        if not self.user.is_active:
+            flash(get_message("DISABLED_ACCOUNT")[0])
+            return False
+        return True
+# authentication
 
 log.early_stage_setup()
 logger = logging.getLogger(__name__)
@@ -67,6 +165,7 @@ import RHUtils
 from RHUtils import catchLogExceptionsWrapper
 from Language import __
 from ClusterNodeSet import SlaveNode, ClusterNodeSet
+from util.SendAckQueue import SendAckQueue
 
 # Events manager
 from eventmanager import Evt, EventManager
@@ -107,6 +206,7 @@ if RHUtils.checkSetFileOwnerPi(log.LOG_DIR_NAME):
 CMDARG_VERSION_LONG_STR = '--version'  # show program version and exit
 CMDARG_VERSION_SHORT_STR = '-v'        # show program version and exit
 CMDARG_ZIP_LOGS_STR = '--ziplogs'      # create logs .zip file
+CMDARG_CREATE_SALT = '--salt'          # create salt for password hash
 
 if __name__ == '__main__' and len(sys.argv) > 1:
     if CMDARG_VERSION_LONG_STR in sys.argv or CMDARG_VERSION_SHORT_STR in sys.argv:
@@ -114,10 +214,17 @@ if __name__ == '__main__' and len(sys.argv) > 1:
     if CMDARG_ZIP_LOGS_STR in sys.argv:
         log.create_log_files_zip(logger, Config.CONFIG_FILE_NAME, DB_FILE_NAME)
         sys.exit(0)
+    if CMDARG_CREATE_SALT in sys.argv:
+        import secrets
+        salt = secrets.SystemRandom().getrandbits(128)
+        print("Please add following salt to your config.json: {0}".format(salt))
+        print('For example:\n		"SALT": "{0}"'.format(salt))
+        sys.exit(0)
     print("Unrecognized command-line argument(s): {0}".format(sys.argv[1:]))
 
-TEAM_NAMES_LIST = [str(unichr(i)) for i in range(65, 91)]  # list of 'A' to 'Z' strings
-DEF_TEAM_NAME = 'A'  # default team
+# TEAM_NAMES_LIST = [str(unichr(i)) for i in range(65, 91)]  # list of 'A' to 'Z' strings
+# DEF_TEAM_NAME = 'A'  # default team
+DEF_TEAM_NAME = 'Guest' # default team # todo: must come from database
 
 BASEDIR = os.getcwd()
 APP.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(BASEDIR, DB_FILE_NAME)
@@ -136,6 +243,7 @@ Current_log_path_name = log.later_stage_setup(Config.LOGGING, SOCKET_IO)
 INTERFACE = None  # initialized later
 SENSORS = Sensors()
 CLUSTER = None    # initialized later
+ClusterSendAckQueueObj = None
 serverInfo = None
 serverInfoItems = None
 Use_imdtabler_jar_flag = False  # set True if IMDTabler.jar is available
@@ -293,35 +401,11 @@ class RHRaceFormat():
     def isDbBased(cls, race_format):
         return hasattr(race_format, 'id')
 
-#
-# Authentication
-#
-
-def check_auth(username, password):
-    '''Check if a username password combination is valid.'''
-    return username == Config.GENERAL['ADMIN_USERNAME'] and password == Config.GENERAL['ADMIN_PASSWORD']
-
-def authenticate():
-    '''Sends a 401 response that enables basic auth.'''
-    return Response(
-        'Could not verify your access level for that URL.\n'
-        'You have to login with proper credentials', 401,
-        {'WWW-Authenticate': 'Basic realm="Login Required"'})
-
-def requires_auth(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or not check_auth(auth.username, auth.password):
-            return authenticate()
-        return f(*args, **kwargs)
-    return decorated
-
 # Flask template render with exception catch, so exception
 # details are sent to the log file (instead of 'stderr').
 def render_template(template_name_or_list, **context):
     try:
-        return templating.render_template(template_name_or_list, **context)
+        return templating.render_template(template_name_or_list, user=current_user, serverInfo=serverInfo, getOption=Options.get, __=__, Debug=Config.GENERAL['DEBUG'], **context)
     except Exception:
         logger.exception("Exception in render_template")
     return "Error rendering template"
@@ -338,6 +422,57 @@ def trigger_event(event, evtArgs=None):
     except Exception:
         logger.exception("Exception in 'trigger_event()'")
 
+
+# It's time to load security
+# authentication
+APP.config["SECURITY_PASSWORD_HASH"] = "argon2"
+# argon2 uses double hashing by default - so provide key.
+# Call it before first start and copy the key to config.json
+# import secrets
+# secrets.SystemRandom().getrandbits(128)
+
+APP.config["SECURITY_PASSWORD_SALT"] = Config.GENERAL["SALT"]
+# Take password complexity seriously
+APP.config["SECURITY_PASSWORD_COMPLEXITY_CHECKER"] = "zxcvbn"
+
+# Do not send emails until we've a configured mail server
+APP.config["SECURITY_SEND_REGISTER_EMAIL"] = False
+APP.config['SECURITY_UNAUTHORIZED_VIEW'] = "/"
+
+# Default Authentication is basic Auth until we're using the new technology
+auth_type = "basic"
+if Config.GENERAL["EXTENDED_AUTH"]:
+    auth_type = "session"
+else:
+    APP.config["SECURITY_USER_IDENTITY_ATTRIBUTES"] = "username"
+
+for opt in [
+        "changeable",
+        "recoverable",
+        "registerable",
+        "trackable",
+    ]:
+        APP.config["SECURITY_" + opt.upper()] = True
+
+# Define models - for this example - we change the default table names
+fsqla.FsModels.set_db_info(DB)
+
+class Role(DB.Model, fsqla.FsRoleMixin):
+    pass
+
+class User(DB.Model, fsqla.FsUserMixin):
+    pass
+
+user_datastore = SQLAlchemyUserDatastore(DB, User, Role)
+# Setup Flask-Security
+APP.security = Security(APP, user_datastore, render_template=render_template, login_form=RHLoginForm, register_form=RHRegisterForm)
+@APP.before_first_request
+def create_users_and_roles():
+    logger.error("--> create_users_and_roles begin")
+    db_reset_users()
+    logger.error("--> create_users_and_roles end")
+# authentication
+
 #
 # Routes
 #
@@ -345,43 +480,21 @@ def trigger_event(event, evtArgs=None):
 @APP.route('/')
 def render_index():
     '''Route to home page.'''
-    return render_template('home.html', serverInfo=serverInfo,
-                           getOption=Options.get, __=__, Debug=Config.GENERAL['DEBUG'])
+    return render_template('home.html') # serverInfo=serverInfo, getOption=Options.get, __=__, Debug=Config.GENERAL['DEBUG'])
 
 @APP.route('/event')
 def render_event():
     '''Route to heat summary page.'''
-    return render_template('event.html', serverInfo=serverInfo, getOption=Options.get, __=__)
+    return render_template('event.html') #, serverInfo=serverInfo, getOption=Options.get, __=__)
 
 @APP.route('/results')
 def render_results():
     '''Route to round summary page.'''
-    return render_template('results.html', serverInfo=serverInfo, getOption=Options.get, __=__, Debug=Config.GENERAL['DEBUG'])
+    return render_template('results.html') #, serverInfo=serverInfo, getOption=Options.get, __=__, Debug=Config.GENERAL['DEBUG'])
 
-# husky-koglhof
-@APP.route('/racemgmt')
-def racemgmt():
-    '''Route to race management page.'''
-    frequencies = [node.frequency for node in INTERFACE.nodes]
-    nodes = []
-    for idx, freq in enumerate(frequencies):
-        if freq:
-            nodes.append({
-                'freq': freq,
-                'index': idx
-            })
-
-    return render_template('racemanagement.html', serverInfo=serverInfo, getOption=Options.get, __=__,
-        led_enabled=led_manager.isEnabled(),
-        vrx_enabled=vrx_controller!=None,
-        num_nodes=RACE.num_nodes,
-        current_heat=RACE.current_heat, pilots=Database.Pilot,
-        nodes=nodes,
-        cluster_has_slaves=(CLUSTER and CLUSTER.hasSlaves()))
-
-@APP.route('/race')
 @APP.route('/run')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_run():
     '''Route to race management page.'''
     frequencies = [node.frequency for node in INTERFACE.nodes]
@@ -393,7 +506,7 @@ def render_run():
                 'index': idx
             })
 
-    return render_template('run.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('run.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         led_enabled=(led_manager.isEnabled() or (CLUSTER and CLUSTER.hasRecEventsSlaves())),
         vrx_enabled=vrx_controller!=None,
         num_nodes=RACE.num_nodes,
@@ -413,48 +526,105 @@ def render_current():
                 'index': idx
             })
 
-    return render_template('current.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('current.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         num_nodes=RACE.num_nodes,
         nodes=nodes,
         cluster_has_slaves=(CLUSTER and CLUSTER.hasSlaves()))
 
 @APP.route('/marshal')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_marshal():
     '''Route to race management page.'''
-    return render_template('marshal.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('marshal.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         num_nodes=RACE.num_nodes)
 
+@APP.route('/profiles')
+@auth_required()
+def profile():
+    '''Route to current user profile page.'''
+    return render_template('security/user_profile.html', pilots=Database.Pilot, # teams=Database.Pilot.query.with_entities(Database.Pilot.team).distinct())
+    teams=Database.Team.query.all())
+
+@APP.route('/profiles', methods=['GET', 'POST'])
+@auth_required(auth_type)
+def render_profiles():
+    logger.error("/profile with method POST called")
+
+    if request.form['submit'] == __('Revert'):
+        return render_index()
+
+    username_ = request.form['username']
+    callsign_=request.form['callsign']
+    email_=request.form['email']
+    user_ = user_datastore.find_user(username=username_)
+    logger.error("USER = {0}".format(user_))
+    if not user_ is None and user_.id != current_user.id:
+        flash(__("Username already associated"))
+        return redirect("/profile", code=302)
+    else:
+        user_ = user_datastore.find_user(email=email_)
+        if not user_ is None and user_.id != current_user.id:
+            flash(__("Email already associated"))
+            return redirect("/profile", code=302)
+
+    user_ = user_datastore.find_user(username=current_user.username)
+    logger.error("username = {0}, callsign = {1}, email = {2}".format(username_, callsign_, email_))
+
+    user_.username = username_
+    user_.callsign = callsign_
+    user_.email = email_
+    DB.session.commit()
+
+    return render_index()
+
+@APP.route('/administration')
+@auth_required(auth_type)
+@roles_required('admin')
+def render_administration():
+    '''Route to user adminstrations page.'''
+    return render_template('security/administration.html',
+        request="administration")
+
+@APP.route('/profile')
+@auth_required(auth_type)
+def render_profile():
+    '''Route to user profile page.'''
+    return render_template('security/user_profile.html',
+        request="profile")
+
 @APP.route('/settings')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_settings():
     '''Route to settings page.'''
-    return render_template('settings.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('settings.html', # serverInfo=serverInfo, getOption=Options.get, __=__,Debug=Config.GENERAL['DEBUG'],
         led_enabled=(led_manager.isEnabled() or (CLUSTER and CLUSTER.hasRecEventsSlaves())),
         led_events_enabled=led_manager.isEnabled(),
         vrx_enabled=vrx_controller!=None,
         num_nodes=RACE.num_nodes,
         ConfigFile=Config.GENERAL['configFile'],
         cluster_has_slaves=(CLUSTER and CLUSTER.hasSlaves()),
-        Debug=Config.GENERAL['DEBUG'])
+        users=User,
+        roles=Role)
 
 @APP.route('/streams')
 def render_stream():
     '''Route to stream index.'''
-    return render_template('streams.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('streams.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         num_nodes=RACE.num_nodes)
 
 @APP.route('/stream/results')
 def render_stream_results():
     '''Route to current race leaderboard stream.'''
-    return render_template('streamresults.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('streamresults.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         num_nodes=RACE.num_nodes)
 
 @APP.route('/stream/node/<int:node_id>')
 def render_stream_node(node_id):
     '''Route to single node overlay for streaming.'''
     if node_id <= RACE.num_nodes:
-        return render_template('streamnode.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+        return render_template('streamnode.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
             node_id=node_id-1
         )
     else:
@@ -463,52 +633,56 @@ def render_stream_node(node_id):
 @APP.route('/stream/class/<int:class_id>')
 def render_stream_class(class_id):
     '''Route to class leaderboard display for streaming.'''
-    return render_template('streamclass.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('streamclass.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         class_id=class_id
     )
 
 @APP.route('/stream/heat/<int:heat_id>')
 def render_stream_heat(heat_id):
     '''Route to heat display for streaming.'''
-    return render_template('streamheat.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('streamheat.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         num_nodes=RACE.num_nodes,
         heat_id=heat_id
     )
 
 @APP.route('/scanner')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_scanner():
     '''Route to scanner page.'''
 
-    return render_template('scanner.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('scanner.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         num_nodes=RACE.num_nodes)
 
 @APP.route('/decoder')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_decoder():
     '''Route to race management page.'''
-    return render_template('decoder.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('decoder.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         num_nodes=RACE.num_nodes)
 
 @APP.route('/imdtabler')
 def render_imdtabler():
     '''Route to IMDTabler page.'''
 
-    return render_template('imdtabler.html', serverInfo=serverInfo, getOption=Options.get, __=__)
+    return render_template('imdtabler.html') #, serverInfo=serverInfo, getOption=Options.get, __=__)
 
 # Debug Routes
 
 @APP.route('/hardwarelog')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_hardwarelog():
     '''Route to hardware log page.'''
-    return render_template('hardwarelog.html', serverInfo=serverInfo, getOption=Options.get, __=__)
+    return render_template('hardwarelog.html') # serverInfo=serverInfo, getOption=Options.get, __=__)
 
 @APP.route('/database')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_database():
     '''Route to database page.'''
-    return render_template('database.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+    return render_template('database.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
         pilots=Database.Pilot,
         heats=Database.Heat,
         heatnodes=Database.HeatNode,
@@ -517,14 +691,17 @@ def render_database():
         savedraceLap=Database.SavedRaceLap,
         profiles=Database.Profiles,
         race_format=Database.RaceFormat,
-        globalSettings=Database.GlobalSettings)
+        globalSettings=Database.GlobalSettings,
+        users=User,
+        roles=Role)
 
 @APP.route('/vrxstatus')
-@requires_auth
+@auth_required(auth_type)
+@roles_required('admin')
 def render_vrxstatus():
     '''Route to database page.'''
     if vrx_controller:
-        return render_template('vrxstatus.html', serverInfo=serverInfo, getOption=Options.get, __=__,
+        return render_template('vrxstatus.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
             vrxstatus=vrx_controller.rx_data)
     else:
         return False
@@ -546,10 +723,7 @@ def render_viewDocs():
         with io.open('../../doc/' + docfile, 'r', encoding="utf-8") as f:
             doc = f.read()
 
-        return templating.render_template('viewdocs.html',
-            serverInfo=serverInfo,
-            getOption=Options.get,
-            __=__,
+        return render_template('viewdocs.html', # serverInfo=serverInfo, getOption=Options.get, __=__,
             doc=doc
             )
     except Exception:
@@ -580,6 +754,371 @@ def start_background_threads():
 #
 # Socket IO Events
 #
+
+@SOCKET_IO.on('getUser')
+def getUser(data):
+    '''Gets actual userdata'''
+    logger.debug('Get user')
+    message = ""
+
+    # Get all available teams
+    teams = []
+    for _team in Database.Team.query.all():
+        teams.append(_team.name)
+
+    # Get all available roles
+    all_roles = []
+    for role in user_datastore.role_model.query.all():
+        all_roles.append(role.name)
+
+    # Get all available pilots
+    pilots = []
+    for _pilot in Database.Pilot.query.all():
+        if Database.UserPilot.query.filter_by(pilot_id=_pilot.id).one_or_none() is None:
+            pilots.append({'id': _pilot.id, 'name': _pilot.name, 'callsign': _pilot.callsign})
+        else:
+            pilots.append({'id': _pilot.id, 'name': _pilot.name, 'disabled': True, 'callsign': _pilot.callsign})
+
+    user_id = int(data['user_id'])
+    if user_id == 0: # Only happens if "Create New" is selected
+        logger.error("Create new user")
+    
+        emit_payload = {
+            '_userid': 0,
+            '_username': "",
+            '_roles': [],
+            '_all_roles': all_roles,
+            '_confirmed_at': "",
+            '_email': "",
+            '_active': False,
+            '_callsign': "",
+            '_team': "",
+            '_teams': teams,
+            '_pilot': -1,
+            '_pilots': pilots
+        }
+    else:
+        # Get selected user object
+        user = user_datastore.get_user(user_id)
+        # Get active roles for the selected user
+        roles = []
+        for role in user.roles:
+            roles.append(role.name)
+
+
+        # Get the linked pilot data
+        userPilot = Database.UserPilot.query.filter_by(user_id=user.id).one_or_none()
+
+        if userPilot is None:
+            hasPilot = -1
+            callsign = ""
+            team = ""
+        else:
+            pilot = Database.Pilot.query.filter_by(id=userPilot.pilot_id).one_or_none()
+            # TODO: If anyone has deleted pilot via settings...
+            if pilot is None:
+                message += "Pilot was deleted via settings"
+                hasPilot = -1
+                callsign = ""
+                team = ""
+                logger.error("Clearing UserPilot link")
+                DB.session.delete(userPilot)
+                DB.session.commit()
+                # TODO: Remove the bad UserPilot link
+            else:
+                hasPilot = pilot.id
+                callsign = pilot.callsign
+                team = pilot.team
+
+        timestamp = ""
+        if user.confirmed_at:
+            timestamp = user.confirmed_at.isoformat()
+
+        emit_payload = {
+            '_userid': user.id,
+            '_username': user.username,
+            '_roles': roles,
+            '_all_roles': all_roles,
+            '_confirmed_at': timestamp,
+            '_email': user.email,
+            '_active': user.active,
+            '_callsign': callsign,
+            '_team': team,
+            '_teams': teams,
+            '_pilot': hasPilot,
+            '_pilots': pilots
+        }
+
+    if message != "":
+        emit_msg_payload = {
+            'message': message,
+        }
+        emit("user_message", emit_msg_payload)
+    emit('user_data', emit_payload)
+
+@SOCKET_IO.on('saveUserData')
+def save_user_data(data):
+    logger.debug('Save userdata')
+    logger.error(data)
+
+    action = data['action']
+    userid = int(data['id'])
+    password_confirm = data['password_confirm']
+    message = ""
+    user = None
+    
+    if action == 'delete':
+        logger.error('delete user')
+        # TODO:
+        # We have to check if the password is the correct one from the actual user
+        confirmed = current_user.verify_and_update_password(password_confirm)
+
+        # Check if we have userpilot link, if so, remove it
+        userPilot = Database.UserPilot.query.filter_by(user_id=userid).one_or_none()
+        if not userPilot is None:
+            logger.error("Clearing UserPilot link")
+            DB.session.delete(userPilot)
+            DB.session.commit()
+
+        if confirmed:
+            logger.error("Remove User")
+            user = user_datastore.get_user(userid)
+            user_datastore.delete_user(user)
+            user_datastore.commit()
+
+            message += "User successfully removed<br>"
+        else:
+            message += "Please use your correct password<br>"
+    else:
+        username = data['username']
+        pilotAction = int(data['pilot'])
+        lockedUser = data['lockedUser']
+        email = data['email']
+        callsign = data['callsign']
+        team = data['team']
+        confirmUser = data['confirmUser']
+        password = data['password']
+        roles = data['roles']
+
+        if userid == 0:
+            # Create new User
+            logger.error("Create new User...")
+
+            # Password checker
+            if password == "" and password_confirm == "":
+                logger.error("No Password set, it's invalid")
+                message += "No Password set, it's invalid<br>"
+            else:
+                pbad = default_password_validator(
+                    password, True
+                )
+                if pbad:
+                    # flash(pbad[0])
+                    logger.error('PBAD MESSAGE = {0}'.format(pbad[0]))
+                    message = pbad[0]
+                else:
+                    # Check if username is already set
+                    if user_datastore.find_user(username=username) is None:
+                        if email == "":
+                            email = username + "@rotorhazard.com"
+                        if confirmUser:
+                            confirmed_at = datetime.now()
+                        else:
+                            confirmed_at = None
+
+                        user = user_datastore.create_user(
+                            email=email, password=hash_password(password), username=username, confirmed_at=confirmed_at, roles=["guest"]
+                        )
+                        message += "Successfully created<br>"
+                    else:
+                        logger.error("There exists already an user with username '{0}'".format(username))
+                        message += "There exists already an user with username '" + username + "'<br>"
+        else:
+            user = user_datastore.get_user(userid)
+
+        if not user is None:
+            # Remove all roles and then add all new
+            # Only if existing user
+            for _role in user_datastore.role_model.query.all():
+                logger.error("_Role = {0}".format(_role))
+                user_datastore.remove_role_from_user(user, _role)
+
+            logger.error(roles)
+            for role in roles:
+                logger.error("Role = {0}".format(role))
+                user_datastore.add_role_to_user(user, role)
+
+            if userid > 0:
+                if user.email != email:
+                    # logger.error("Save email {0} to user {1}".format(email, user.username))
+                    user.email = email
+                    message += "Email changed<br>"
+            
+            if username != user.username:
+                # Check if username is already set
+                    if user_datastore.find_user(username=username) is None:
+                        user.username = username
+                    else:
+                        logger.error("There exists already an user with username '{0}'".format(username))
+                        message += "There exists already an user with username '" + username + "'<br>"
+            if lockedUser:
+                if user.active:
+                    logger.error("Deactivate user {0}".format(user.username))
+                    user_datastore.deactivate_user(user)
+                    message += "User deactivated<br>"
+            else:
+                if not user.active:
+                    logger.error("Activate user {0}".format(user.username))
+                    user_datastore.activate_user(user)
+                    message += "User activated<br>"
+
+            if confirmUser:
+                confirmed = confirm_user(user)
+                logger.error("User {0} is {1}".format(user, confirmed))
+                message += "User confirmed<br>"
+
+            # Pilot Data
+            # pilot == 0 means Create new Pilot:
+            if pilotAction == 0:
+                # First check if these user already has a pilot set
+                userPilot = Database.UserPilot.query.filter_by(user_id=user.id).one_or_none()
+                if not userPilot is None:
+                    logger.error("Clearing UserPilot link")
+                    DB.session.delete(userPilot)
+                    DB.session.commit()
+                else:
+                    logger.error("No UserPilot link found, create new pilot")
+
+                # Get new pilot id    
+                pilot_id = on_add_pilot()
+
+                pilot_data = {}
+                pilot_data['pilot_id'] = int(pilot_id)
+                # pilot_data['callsign'] = user.username
+                pilot_data['callsign'] = callsign
+                pilot_data['team_name'] = team
+                # pilot_data['team_name'] = DEF_TEAM_NAME
+                pilot_data['name'] = user.username
+                # pilot_data['phonetic']
+
+                logger.error("New Pilot id = {0}".format(pilot_id))
+
+                userPilot = Database.UserPilot(user_id=user.id, pilot_id=pilot_id)
+                DB.session.add(userPilot)
+                DB.session.flush()
+                DB.session.refresh(userPilot)
+                DB.session.commit()
+
+                on_alter_pilot(pilot_data)
+                message += "New Pilot created<br>"
+            # pilot == -1 means No Pilot set:
+            elif pilotAction == -1:
+                logger.error("No Pilot set")
+                message += "No Pilot set<br>"
+                # Check if there's current a pilot set, if so, remove this link
+                userPilot = Database.UserPilot.query.filter_by(user_id=user.id).one_or_none()
+                if not userPilot is None:
+                    if userPilot.pilot_id != pilotAction:
+                        logger.error("Clearing UserPilot link")
+                        DB.session.delete(userPilot)
+                        DB.session.commit()
+                        message += "User/Pilot link removed<br>"
+
+            else:
+                # Check if the current team is used from website
+                # First check if these user already has a pilot set
+                clearUserPilot = False
+                userPilot = Database.UserPilot.query.filter_by(user_id=user.id).one_or_none()
+                if not userPilot is None:
+                    if userPilot.pilot_id != pilotAction:
+                        logger.error("Clearing UserPilot link")
+                        DB.session.delete(userPilot)
+                        DB.session.commit()
+                        clearUserPilot = True
+                else:
+                    clearUserPilot = True
+
+                pilot = Database.Pilot.query.filter_by(id=pilotAction).one_or_none()
+                if pilot.callsign != callsign:
+                    pilot.callsign = callsign
+                if pilot.team != team:
+                    pilot.team = team
+
+                if clearUserPilot:
+                    userPilot = Database.UserPilot(user_id=user.id, pilot_id=pilot.id)
+                    DB.session.add(userPilot)
+                    DB.session.flush()
+                    DB.session.refresh(userPilot)
+                    message += "User switched to different pilot<br>"
+                else:
+                    message += "User Pilot set<br>"
+                DB.session.commit()
+
+            # Password checker
+            # Only needed if user already exists
+            if userid > 0:
+                if password == "" and password_confirm == "":
+                    logger.error("Do Nothing, passwords aren't changed")
+                else:
+                    if user.password == encrypt_password(password):
+                        flash("Old and new password didn't differ")
+                        logger.error("Old and new password didn't differ")
+                    else:
+                        pbad = default_password_validator(
+                            password, False, user=user
+                        )
+                        if pbad:
+                            flash(pbad[0])
+                            logger.error(pbad[0])
+                            message += pbad[0] + "<br>"
+                        else:
+                            # Now change the password
+                            user.password = hash_password(password)
+                            # flash("New password saved")
+                            logger.error("New password saved")
+                            message += "New password saved<br>"
+
+            # Last of all, save user back to database
+            user_datastore.put(user)
+            user_datastore.commit()
+            # message = "User saved"
+
+    emit_payload = {
+        'message': message,
+    }
+    emit("user_message", emit_payload)
+    emit_user_data(current = (current_user.id == user.id), nobroadcast = True)
+
+@SOCKET_IO.on('confirm_new_user')
+def confirm_new_user(data):
+    '''Confirms a user so we can start the pilot process'''
+    logger.debug('Confirm user')
+    user_id = data['user_id']
+
+    user = user_datastore.get_user(user_id)
+    confirmed = confirm_user(user)
+    user_datastore.put(user)
+    user_datastore.commit()
+    logger.error("User {0} is {1}".format(user, confirmed))
+    pilot_id = on_add_pilot()
+
+    pilot_data = {}
+    pilot_data['pilot_id'] = int(pilot_id)
+    # pilot_data['callsign']
+    pilot_data['team_name'] = DEF_TEAM_NAME
+    # pilot_data['phonetic']
+    pilot_data['name'] = user.username
+    pilot_data['callsign'] = user.username
+
+    on_alter_pilot(pilot_data)
+    emit_pilot_data() # Settings page, new pilot settings
+
+    # Create User <-> Profile, so users can create own profiles
+    new_profile_user = Database.ProfileUser(user_id = user_id, profile_id = 1, active = True) # Default Profile
+    DB.session.add(new_profile_user)
+    DB.session.flush()
+    DB.session.commit()
+    # TODO:
 
 @SOCKET_IO.on('connect')
 @catchLogExceptionsWrapper
@@ -633,11 +1172,19 @@ def on_reset_auto_calibration(data):
 
 # Cluster events
 
+def emit_cluster_msg_to_master(messageType, messagePayload, waitForAckFlag=True):
+    '''Emits cluster message to master timer.'''
+    global ClusterSendAckQueueObj
+    if not ClusterSendAckQueueObj:
+        ClusterSendAckQueueObj = SendAckQueue(20, SOCKET_IO, logger)
+    ClusterSendAckQueueObj.put(messageType, messagePayload, waitForAckFlag)
+
 def emit_join_cluster_response():
+    '''Emits 'join_cluster_response' message to master timer.'''
     payload = {
         'server_info': json.dumps(serverInfoItems)
     }
-    SOCKET_IO.emit('join_cluster_response', payload)
+    emit_cluster_msg_to_master('join_cluster_response', payload, False)
 
 @SOCKET_IO.on('join_cluster')
 @catchLogExceptionsWrapper
@@ -678,6 +1225,17 @@ def on_cluster_event_trigger(data):
     # special handling for LED Control via master timer
     elif 'effect' in evtArgs and led_manager.isEnabled():
         led_manager.setEventEffect(Evt.LED_MANUAL, evtArgs['effect'])
+
+@SOCKET_IO.on('cluster_message_ack')
+@catchLogExceptionsWrapper
+def on_cluster_message_ack(data):
+    ''' Received message acknowledgement from master. '''
+    if ClusterSendAckQueueObj:
+        messageType = str(data.get('messageType')) if data else None
+        messagePayload = data.get('messagePayload') if data else None
+        ClusterSendAckQueueObj.ack(messageType, messagePayload)
+    else:
+        logger.warn("Received 'on_cluster_message_ack' message with no ClusterSendAckQueueObj setup")
 
 # RotorHazard events
 
@@ -747,6 +1305,12 @@ def on_load_data(data):
             emit_cluster_status()
         elif load_type == 'hardware_log_init':
             emit_current_log_file_to_socket()
+        elif load_type == 'team_data':
+            emit_team_data(nobroadcast=True)
+        elif load_type == 'user_data':
+            emit_user_data(nobroadcast=True, current=False)
+        elif load_type == 'current_user':
+            emit_user_data(nobroadcast=True, current=True)
 
 @SOCKET_IO.on('broadcast_message')
 @catchLogExceptionsWrapper
@@ -771,6 +1335,11 @@ def on_set_frequency(data):
 
     profile = getCurrentProfile()
     freqs = json.loads(profile.frequencies)
+
+    # handle case where more nodes were added
+    while node_index >= len(freqs["f"]):
+        freqs["f"].append(RHUtils.FREQUENCY_ID_NONE)
+
     freqs["f"][node_index] = frequency
     profile.frequencies = json.dumps(freqs)
     logger.info('Frequency set: Node {0} Frequency {1}'.format(node_index+1, frequency))
@@ -824,6 +1393,8 @@ def on_set_frequency_preset(data):
             freqs = [5658, 5695, 5760, 5800, 5885, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
         else: #IMD6C is default
             freqs = [5658, 5695, 5760, 5800, 5880, 5917, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
+        while RACE.num_nodes > len(freqs):
+            freqs.append(RHUtils.FREQUENCY_ID_NONE)
 
     set_all_frequencies(freqs)
     emit_frequency_data()
@@ -869,12 +1440,21 @@ def on_set_enter_at_level(data):
     node_index = data['node']
     enter_at_level = data['enter_at_level']
 
+    if node_index < 0 or node_index >= RACE.num_nodes:
+        logger.info('Unable to set enter-at ({0}) on node {1}; node index out of range'.format(enter_at_level, node_index+1))
+        return
+
     if not enter_at_level:
         logger.info('Node enter-at set null; getting from node: Node {0}'.format(node_index+1))
         enter_at_level = INTERFACE.nodes[node_index].enter_at_level
 
     profile = getCurrentProfile()
     enter_ats = json.loads(profile.enter_ats)
+
+    # handle case where more nodes were added
+    while node_index >= len(enter_ats["v"]):
+        enter_ats["v"].append(None)
+
     enter_ats["v"][node_index] = enter_at_level
     profile.enter_ats = json.dumps(enter_ats)
     DB.session.commit()
@@ -895,12 +1475,21 @@ def on_set_exit_at_level(data):
     node_index = data['node']
     exit_at_level = data['exit_at_level']
 
+    if node_index < 0 or node_index >= RACE.num_nodes:
+        logger.info('Unable to set exit-at ({0}) on node {1}; node index out of range'.format(exit_at_level, node_index+1))
+        return
+
     if not exit_at_level:
         logger.info('Node exit-at set null; getting from node: Node {0}'.format(node_index+1))
         exit_at_level = INTERFACE.nodes[node_index].exit_at_level
 
     profile = getCurrentProfile()
     exit_ats = json.loads(profile.exit_ats)
+
+    # handle case where more nodes were added
+    while node_index >= len(exit_ats["v"]):
+        exit_ats["v"].append(None)
+
     exit_ats["v"][node_index] = exit_at_level
     profile.exit_ats = json.dumps(exit_ats)
     DB.session.commit()
@@ -1085,34 +1674,37 @@ def on_alter_heat(data):
     race_list = Database.SavedRaceMeta.query.filter_by(heat_id=heat_id).all()
 
     if 'class' in data:
-        for race_meta in race_list:
-            race_meta.class_id = data['class']
-            # race_meta.cacheStatus=Results.CacheStatus.INVALID
+        if len(race_list):
+            for race_meta in race_list:
+                race_meta.class_id = data['class']
+                # race_meta.cacheStatus=Results.CacheStatus.INVALID
 
-        if old_class_id is not Database.CLASS_ID_NONE:
-            old_class = Database.RaceClass.query.get(old_class_id)
-            old_class.cacheStatus = Results.CacheStatus.INVALID
+            if old_class_id is not Database.CLASS_ID_NONE:
+                old_class = Database.RaceClass.query.get(old_class_id)
+                old_class.cacheStatus = Results.CacheStatus.INVALID
 
     if 'pilot' in data:
-        for race_meta in race_list:
-            for pilot_race in Database.SavedPilotRace.query.filter_by(race_id=race_meta.id).all():
-                if pilot_race.node_index == data['node']:
-                    pilot_race.pilot_id = data['pilot']
-            for race_lap in Database.SavedRaceLap.query.filter_by(race_id=race_meta.id).all():
-                if race_lap.node_index == data['node']:
-                    race_lap.pilot_id = data['pilot']
+        if len(race_list):
+            for race_meta in race_list:
+                for pilot_race in Database.SavedPilotRace.query.filter_by(race_id=race_meta.id).all():
+                    if pilot_race.node_index == data['node']:
+                        pilot_race.pilot_id = data['pilot']
+                for race_lap in Database.SavedRaceLap.query.filter_by(race_id=race_meta.id).all():
+                    if race_lap.node_index == data['node']:
+                        race_lap.pilot_id = data['pilot']
 
-            race_meta.cacheStatus = Results.CacheStatus.INVALID
+                race_meta.cacheStatus = Results.CacheStatus.INVALID
 
-        heat.cacheStatus = Results.CacheStatus.INVALID
+            heat.cacheStatus = Results.CacheStatus.INVALID
 
     if 'pilot' in data or 'class' in data:
-        if heat.class_id is not Database.CLASS_ID_NONE:
-            new_class = Database.RaceClass.query.get(heat.class_id)
-            new_class.cacheStatus = Results.CacheStatus.INVALID
+        if len(race_list):
+            if heat.class_id is not Database.CLASS_ID_NONE:
+                new_class = Database.RaceClass.query.get(heat.class_id)
+                new_class.cacheStatus = Results.CacheStatus.INVALID
 
-        Options.set("eventResults_cacheStatus", Results.CacheStatus.INVALID)
-        FULL_RESULTS_CACHE_VALID = False
+            Options.set("eventResults_cacheStatus", Results.CacheStatus.INVALID)
+            FULL_RESULTS_CACHE_VALID = False
 
     DB.session.commit()
 
@@ -1134,7 +1726,8 @@ def on_alter_heat(data):
 
     logger.info('Heat {0} altered with {1}'.format(heat_id, data))
     emit_heat_data(noself=True)
-    emit_result_data() # live update rounds page
+    if len(race_list):
+        emit_result_data() # live update rounds page
 
     if ('pilot' in data or 'class' in data) and Database.SavedRaceMeta.query.filter_by(heat_id=heat_id).first() is not None:
         message = __('Alterations made to heat: {0}').format(heat.note)
@@ -1321,6 +1914,24 @@ def on_delete_class(data):
         emit_class_data()
         emit_heat_data()
 
+@SOCKET_IO.on('add_team')
+@catchLogExceptionsWrapper
+def on_add_team():
+    '''Adds the next available teamd id number in the database.'''
+    new_team = Database.Team(name='New Team')
+    DB.session.add(new_team)
+    DB.session.flush()
+    DB.session.refresh(new_team)
+    new_team.name = __('~Team %d Name') % (new_team.id)
+    DB.session.commit()
+
+    trigger_event(Evt.TEAM_ADD, {
+        'team_id': new_team.id,
+        })
+
+    logger.info('Team added: Team {0}'.format(new_team.id))
+    emit_team_data()
+
 @SOCKET_IO.on('add_pilot')
 @catchLogExceptionsWrapper
 def on_add_pilot():
@@ -1344,6 +1955,34 @@ def on_add_pilot():
 
     logger.info('Pilot added: Pilot {0}'.format(new_pilot.id))
     emit_pilot_data()
+    return new_pilot.id
+
+
+@SOCKET_IO.on('alter_team')
+@catchLogExceptionsWrapper
+def on_alter_team(data):
+    '''Update team.'''
+    global FULL_RESULTS_CACHE_VALID
+    team_id = data['team']
+    db_update = Database.Team.query.get(team_id)
+
+    db_check = Database.Team.query.filter_by(name=data['note']).count()
+    if db_check > 0:
+        emit_priority_message(__('Using team name {0} twice is not allowed').format(data['note']), True)
+    else:
+        if 'note' in data:
+            db_update.name = data['note']
+
+        DB.session.commit()
+
+        trigger_event(Evt.TEAM_ALTER, {
+            'team_id': team_id,
+            })
+
+        logger.info('Altered team {0} to {1}'.format(team_id, data))
+    
+    emit_team_data() # Settings page, new team settings
+    RACE.cacheStatus = Results.CacheStatus.INVALID  # refresh current leaderboard
 
 @SOCKET_IO.on('alter_pilot')
 @catchLogExceptionsWrapper
@@ -1379,8 +2018,9 @@ def on_alter_pilot(data):
             for heatnode in heatnodes:
                 heat = Database.Heat.query.get(heatnode.heat_id)
                 heat.cacheStatus = Results.CacheStatus.INVALID
-                race_class = Database.RaceClass.query.get(heat.class_id)
-                race_class.cacheStatus = Results.CacheStatus.INVALID
+                if heat.class_id != Database.CLASS_ID_NONE:
+                    race_class = Database.RaceClass.query.get(heat.class_id)
+                    race_class.cacheStatus = Results.CacheStatus.INVALID
                 races = Database.SavedRaceMeta.query.filter_by(heat_id=heatnode.heat_id)
                 for race in races:
                     race.cacheStatus = Results.CacheStatus.INVALID
@@ -1392,6 +2032,30 @@ def on_alter_pilot(data):
         emit_heat_data() # Settings page, new pilot phonetic in heats. Needed?
 
     RACE.cacheStatus = Results.CacheStatus.INVALID  # refresh current leaderboard
+
+@SOCKET_IO.on('delete_team')
+@catchLogExceptionsWrapper
+def on_delete_team(data):
+    '''Delete team.'''
+    team_id = data['team']
+    logger.error("Delete Team {0}".format(team_id))
+    team = Database.Team.query.get(team_id)
+    logger.info("TEAM IS {0}".format(team.id))
+    logger.info("TEAM IS {0}".format(team.name))
+    has_pilots = Database.Pilot.query.filter_by(team=team.name).first()
+    logger.info("has_pilots {0}".format(has_pilots))
+
+    if has_pilots:
+        logger.info('Refusing to delete team {0}: is in use'.format(team.name))
+        emit_priority_message(__('Refusing to delete team {0}: is in use').format(team.name), True)
+    else:
+        DB.session.delete(team)
+        DB.session.commit()
+
+        logger.info('Team {0} deleted'.format(team.id))
+        emit_team_data()
+        emit_heat_data()
+        RACE.cacheStatus = Results.CacheStatus.INVALID  # refresh leaderboard
 
 @SOCKET_IO.on('delete_pilot')
 @catchLogExceptionsWrapper
@@ -1492,10 +2156,14 @@ def on_set_profile(data, emit_vals=True):
         # set freqs, enter_ats, and exit_ats
         freqs_loaded = json.loads(profile.frequencies)
         freqs = freqs_loaded["f"]
+        while RACE.num_nodes > len(freqs):
+            freqs.append(RHUtils.FREQUENCY_ID_NONE)
 
         if profile.enter_ats:
             enter_ats_loaded = json.loads(profile.enter_ats)
             enter_ats = enter_ats_loaded["v"]
+            while RACE.num_nodes > len(enter_ats):
+                enter_ats.append(None)
         else: #handle null data by copying in hardware values
             enter_at_levels = {}
             enter_at_levels["v"] = [node.enter_at_level for node in INTERFACE.nodes]
@@ -1506,6 +2174,8 @@ def on_set_profile(data, emit_vals=True):
         if profile.exit_ats:
             exit_ats_loaded = json.loads(profile.exit_ats)
             exit_ats = exit_ats_loaded["v"]
+            while RACE.num_nodes > len(exit_ats):
+                exit_ats.append(None)
         else: #handle null data by copying in hardware values
             exit_at_levels = {}
             exit_at_levels["v"] = [node.exit_at_level for node in INTERFACE.nodes]
@@ -1528,10 +2198,6 @@ def on_set_profile(data, emit_vals=True):
         hardware_set_all_enter_ats(enter_ats)
         hardware_set_all_exit_ats(exit_ats)
 
-        # husky-koglhof
-        if RACE.race_status == RaceStatus.READY: # only initiate staging if ready
-            clear_laps() # Clear laps before race start
-            emit_current_leaderboard() # Race page, blank leaderboard to the web client
     else:
         logger.warning('Invalid set_profile value: ' + str(profile_val))
 
@@ -1762,6 +2428,9 @@ def on_reset_database(data):
         db_reset_saved_races()
         db_reset_current_laps()
         db_reset_race_formats()
+    elif reset_type == 'users':
+        db_reset_users(clear=True)
+        # TODO: switch to login page
     emit_heat_data()
     emit_pilot_data()
     emit_race_format()
@@ -1771,6 +2440,8 @@ def on_reset_database(data):
     emit('reset_confirm')
 
     trigger_event(Evt.DATABASE_RESET)
+    # TODO: husky-koglhof
+    SOCKET_IO.emit('route_to_login')
 
 @SOCKET_IO.on('shutdown_pi')
 @catchLogExceptionsWrapper
@@ -2108,26 +2779,7 @@ def on_schedule_race(data):
         'scheduled_at': RACE.scheduled_time
         })
 
-    # husky-koglhof
-    if data['s'] == 0:
-        if data['m'] == 1:
-            emit_priority_message(__("Next race begins in 1 minute"), True)
-        else:
-            emit_priority_message(__("Next race begins in {0:01d} minutes").format(data['m']), True)
-    elif data['s'] == 1:
-        if data['m'] == 1:
-            emit_priority_message(__("Next race begins in 1 minute and 1 second"), True)
-        elif data['m'] == 0:
-            emit_priority_message(__("Next race begins in 1 second"), True)
-        else:
-            emit_priority_message(__("Next race begins in {0:01d} minutes {1:01d} second").format(data['m'], data['s']), True)
-    else:
-        if data['m'] == 0:
-            emit_priority_message(__("Next race begins in {0:01d} seconds").format(data['s']), True)
-        elif data['m'] == 1:
-            emit_priority_message(__("Next race begins in 1 minute {0:01d} seconds").format(data['s']), True)
-        else:
-            emit_priority_message(__("Next race begins in {0:01d} minutes {1:01d} seconds").format(data['m'], data['s']), True)
+    emit_priority_message(__("Next race begins in {0:01d}:{1:02d}".format(data['m'], data['s'])), True)
 
 @SOCKET_IO.on('cancel_schedule_race')
 @catchLogExceptionsWrapper
@@ -2171,12 +2823,12 @@ def on_stage_race():
     CLUSTER.emitToSplits('stage_race')
     race_format = getCurrentRaceFormat()
 
-    # if running as slave timer and missed stop/discard msg then stop/clear current race
     if RACE.race_status != RaceStatus.READY:
-        if race_format is SLAVE_RACE_FORMAT:
-            logger.info("Forcing race clear/restart because running as slave timer")
+        if race_format is SLAVE_RACE_FORMAT:  # if running as slave timer
             if RACE.race_status == RaceStatus.RACING:
-                on_stop_race()
+                return  # if race in progress then leave it be
+            # if missed stop/discard message then clear current race
+            logger.info("Forcing race clear/restart because running as slave timer")
             on_discard_laps()
         elif RACE.race_status == RaceStatus.DONE and not RACE.any_laps_recorded():
             on_discard_laps()  # if no laps then allow restart
@@ -2219,8 +2871,6 @@ def on_stage_race():
         RACE.start_token = random.random()
         gevent.spawn(race_start_thread, RACE.start_token)
 
-        # husky-koglhof
-        gevent.spawn(traffic_light_thread_function)
         SOCKET_IO.emit('stage_ready', {
             'hide_stage_timer': MIN != MAX,
             'delay': RACE.start_time_delay_secs,
@@ -2415,8 +3065,6 @@ def race_expire_thread(start_token):
             RACE.timer_running = False # indicate race timer no longer running
             trigger_event(Evt.RACE_FINISH)
             check_win_condition(RACE, INTERFACE, at_finish=True, start_token=start_token)
-            # husky-koglhof
-            on_stop_race()
         else:
             logger.debug("Finished unused race-time-expire thread")
 
@@ -3664,7 +4312,6 @@ def emit_race_list(**params):
     heats_by_class[Database.CLASS_ID_NONE] = [heat.id for heat in Database.Heat.query.filter_by(class_id=Database.CLASS_ID_NONE).all()]
     for race_class in Database.RaceClass.query.all():
         heats_by_class[race_class.id] = [heat.id for heat in Database.Heat.query.filter_by(class_id=race_class.id).all()]
-
     current_classes = {}
     for race_class in Database.RaceClass.query.all():
         current_class = {}
@@ -3803,10 +4450,6 @@ def emit_heat_data(**params):
         emit('heat_data', emit_payload, broadcast=True, include_self=False)
     else:
         SOCKET_IO.emit('heat_data', emit_payload)
-    # husky-koglhof
-    if RACE.race_status == RaceStatus.READY: # only initiate staging if ready
-        clear_laps()
-        emit_current_leaderboard() # Race page, blank leaderboard to the web client
 
 def emit_class_data(**params):
     '''Emits class data.'''
@@ -3844,16 +4487,65 @@ def emit_class_data(**params):
     else:
         SOCKET_IO.emit('class_data', emit_payload)
 
+def emit_user_data(**params):
+    '''Emits user data.'''
+    users_list = []
+
+    if params['current'] == True:
+        users_list.append({
+            'id': current_user.id,
+            'name': current_user.username,
+        })
+    else:
+        for user in user_datastore.user_model.query.all():
+            users_list.append({
+                'id': user.id,
+                'name': user.username,
+            })
+
+    emit_payload = {
+        'users': users_list
+    }
+    if ('nobroadcast' in params):
+        emit('all_users', emit_payload)
+    elif ('noself' in params):
+        emit('all_users', emit_payload, broadcast=True, include_self=False)
+    else:
+        SOCKET_IO.emit('all_users', emit_payload)
+
+def emit_team_data(**params):
+    '''Emits team data.'''
+    teams_list = []
+    for team in Database.Team.query.all():
+        teams_list.append({
+            'team_id': team.id,
+            'name': team.name,
+            'locked': team.name == 'Guest'
+        })
+
+    emit_payload = {
+        'teams': teams_list
+    }
+    if ('nobroadcast' in params):
+        emit('team_data', emit_payload)
+    elif ('noself' in params):
+        emit('team_data', emit_payload, broadcast=True, include_self=False)
+    else:
+        SOCKET_IO.emit('team_data', emit_payload)
+    emit_pilot_data()
+    emit_heat_data()
+
 def emit_pilot_data(**params):
     '''Emits pilot data.'''
     pilots_list = []
     for pilot in Database.Pilot.query.all():
         opts_str = '' # create team-options string for each pilot, with current team selected
-        for name in TEAM_NAMES_LIST:
-            opts_str += '<option value="' + name + '"'
-            if name == pilot.team:
+        # for name in TEAM_NAMES_LIST: # Use Database instead
+        for team in Database.Team.query.all():
+            opts_str += '<option value="' + team.name + '"'
+            if team.name == pilot.team:
                 opts_str += ' selected'
-            opts_str += '>' + name + '</option>'
+            opts_str += '>' + team.name + '</option>'
 
         has_race = Database.SavedPilotRace.query.filter_by(pilot_id=pilot.id).first()
 
@@ -4162,44 +4854,11 @@ def emit_pass_record(node, lap_time_stamp):
         'frequency': node.frequency,
         'timestamp': lap_time_stamp + RACE.start_time_epoch_ms
     }
-    SOCKET_IO.emit('pass_record', payload)
+    emit_cluster_msg_to_master('pass_record', payload)
 
 #
 # Program Functions
 #
-
-# husky-koglhof
-def traffic_light_thread_function():
-    args = None
-    if led_manager.isEnabled() and (RACE.start_time_delay_secs+0.1) > 5:
-        gevent.sleep((RACE.start_time_delay_secs+0.1)-6)
-
-        while True:
-            # Sleep all seconds upper 5 secs
-            # only start these loop if lower 6 secs
-            gevent.sleep(1)
-            if RACE.race_status == RaceStatus.STAGING:  # if race is in progress
-                traffic_light_thread_function.iter_tracker += 1
-                if traffic_light_thread_function.iter_tracker == 1:
-                    led_manager.setEventEffect(Evt.LED_MANUAL, 'oneRing')
-                elif traffic_light_thread_function.iter_tracker == 2:
-                    led_manager.setEventEffect(Evt.LED_MANUAL, 'twoRings')
-                elif traffic_light_thread_function.iter_tracker == 3:
-                    led_manager.setEventEffect(Evt.LED_MANUAL, 'threeRings')
-                elif traffic_light_thread_function.iter_tracker == 4:
-                    led_manager.setEventEffect(Evt.LED_MANUAL, 'fourRings')
-                elif traffic_light_thread_function.iter_tracker == 5:
-                    led_manager.setEventEffect(Evt.LED_MANUAL, 'fiveRings')
-                else:
-                    traffic_light_thread_function.iter_tracker = 0
-                    return False
-            else:
-                traffic_light_thread_function.iter_tracker = 0
-                return False
-
-            trigger_event(Evt.LED_MANUAL, args)
-
-traffic_light_thread_function.iter_tracker = 0
 
 def heartbeat_thread_function():
     '''Allow time for connection handshake to terminate before emitting data'''
@@ -4403,8 +5062,8 @@ def pass_record_callback(node, lap_timestamp_absolute, source):
 
                     if lap_ok_flag:
 
-                        # emit 'pass_record' message (via thread to make sure we're not blocked)
-                        gevent.spawn(emit_pass_record, node, lap_time_stamp)
+                        # emit 'pass_record' message (to master timer in cluster, livetime, etc).
+                        emit_pass_record(node, lap_time_stamp)
 
                         # Add the new lap to the database
                         RACE.node_laps[node.index].append({
@@ -4436,14 +5095,15 @@ def pass_record_callback(node, lap_timestamp_absolute, source):
                             lap_number += 1
 
                         # announce lap
-                        if RACE.format.team_racing_mode:
-                            team = Database.Pilot.query.get(pilot_id).team
-                            team_data = RACE.team_results['meta']['teams'][team]
-                            emit_phonetic_data(pilot_id, lap_number, lap_time, team, team_data['laps'])
-                        else:
-                            emit_phonetic_data(pilot_id, lap_number, lap_time, None, None)
+                        if lap_number > 0:
+                            if RACE.format.team_racing_mode:
+                                team = Database.Pilot.query.get(pilot_id).team
+                                team_data = RACE.team_results['meta']['teams'][team]
+                                emit_phonetic_data(pilot_id, lap_number, lap_time, team, team_data['laps'])
+                            else:
+                                emit_phonetic_data(pilot_id, lap_number, lap_time, None, None)
 
-                        check_win_condition(RACE, INTERFACE) # check for and announce winner
+                            check_win_condition(RACE, INTERFACE) # check for and announce winner
 
                     else:
                         # record lap as 'deleted'
@@ -4487,24 +5147,19 @@ def check_win_condition(RACE, INTERFACE, **kwargs):
                 if len(win_phon_name) <= 0:  # if no phonetic then use callsign
                     win_phon_name = win_status['data']['callsign']
                 emit_phonetic_text(__('Winner is') + ' ' + win_phon_name, 'race_winner')
-            # husky-koglhof
-            on_stop_race()
         elif win_status['status'] == WinStatus.TIE:
             # announce tied
             if win_status['status'] != previous_win_status:
                 RACE.status_message = __('Race Tied')
                 emit_race_status_message()
                 emit_phonetic_text(RACE.status_message, 'race_winner')
-                # husky-koglhof
-                on_stop_race()
         elif win_status['status'] == WinStatus.OVERTIME:
             # announce overtime
             if win_status['status'] != previous_win_status:
                 RACE.status_message = __('Race Tied: Overtime')
                 emit_race_status_message()
                 emit_phonetic_text(RACE.status_message, 'race_winner')
-                # husky-koglhof
-                on_stop_race()
+
         if 'max_consideration' in win_status:
             logger.debug("Waiting {0}ms to declare winner.".format(win_status['max_consideration']))
             gevent.sleep(win_status['max_consideration'] / 1000)
@@ -4562,6 +5217,8 @@ def default_frequencies():
         freqs = [5658, 5732, 5843, 5880, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
     else:
         freqs = [5658, 5695, 5760, 5800, 5880, 5917, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
+        while RACE.num_nodes > len(freqs):
+            freqs.append(RHUtils.FREQUENCY_ID_NONE)
     return freqs
 
 def assign_frequencies():
@@ -4599,6 +5256,7 @@ def db_init(**kwargs):
     db_reset_current_laps()
     db_reset_saved_races()
     db_reset_profile()
+    db_reset_teams()
     db_reset_race_formats()
     db_reset_options_defaults()
     assign_frequencies()
@@ -4615,6 +5273,7 @@ def db_reset(**kwargs):
     db_reset_current_laps()
     db_reset_saved_races()
     db_reset_profile()
+    db_reset_teams()
     db_reset_race_formats()
     assign_frequencies()
     logger.info('Database reset')
@@ -4627,6 +5286,45 @@ def db_reset_pilots():
             name='Pilot {0} Name'.format(node+1), team=DEF_TEAM_NAME, phonetic=''))
     DB.session.commit()
     logger.info('Database pilots reset')
+
+def db_reset_users(clear=False):
+    '''Resets database user and roles to default.'''
+    count = user_datastore.user_model.query.count()
+    if count == 0:
+        clear = True
+
+    if clear:
+        if count > 0:
+            for userid in range(1, count):
+                user = user_datastore.find_user(id=userid)
+                if user == None:
+                    break
+                user_datastore.delete_user(user)
+
+        # We do not support deleting roles (yet)
+        if user_datastore.find_role("admin") is None:
+            user_datastore.create_role(name="admin", permissions={"admin-read", "admin-write", "user-read", "user-write"})
+            user_datastore.create_role(name="team-admin", permissions={"admin-read", "admin-write", "user-read", "user-write"})
+            user_datastore.create_role(name="monitor", permissions={"monitor-read", "user-read"})
+            user_datastore.create_role(name="user", permissions={"user-read", "user-write"})
+            user_datastore.create_role(name="pilot", permissions={"pilot-read", "pilot-write"})
+            user_datastore.create_role(name="guest", permissions={"user-read"})
+
+        username = Config.GENERAL['ADMIN_USERNAME']
+        password = Config.GENERAL['ADMIN_PASSWORD']
+        user_datastore.create_user(
+            email=username+"@rotorhazard.com", password=hash_password(password), roles=["admin"], username=username, confirmed_at=datetime.now()
+        )
+
+        user_datastore.create_user(
+            email="monitor@rotorhazard.com", password=hash_password("monitor"), roles=["monitor"], username="monitor", confirmed_at=datetime.now(), active=False
+        )
+
+        # Delete all user_pilot, we don't create new, cause we have no pilots
+        DB.session.query(Database.UserPilot).delete()
+
+        DB.session.commit()
+        logger.info('Database user and roles reset')
 
 def db_reset_heats(**kwargs):
     '''Resets database heats to default.'''
@@ -4661,6 +5359,13 @@ def db_reset_saved_races():
     DB.session.commit()
     logger.info('Database saved races reset')
 
+def db_reset_teams():
+    '''Set default teams'''
+    DB.session.query(Database.Team).delete()
+    DB.session.add(Database.Team(name=__("Guest")))
+    DB.session.commit()
+    logger.info("Database set default team")
+
 def db_reset_profile():
     '''Set default profile'''
     DB.session.query(Database.Profiles).delete()
@@ -4669,7 +5374,7 @@ def db_reset_profile():
     new_freqs["f"] = default_frequencies()
 
     template = {}
-    template["v"] = [None, None, None, None, None, None, None, None]
+    template["v"] = [None for i in range(max(RACE.num_nodes,8))]
 
     DB.session.add(Database.Profiles(name=__("Default"),
                              frequencies = json.dumps(new_freqs),
@@ -5104,8 +5809,8 @@ def recover_database(dbfile, **kwargs):
             restore_table(Database.Profiles, profiles_query_data, defaults={
                     'name': __("Migrated Profile"),
                     'frequencies': json.dumps(default_frequencies()),
-                    'enter_ats': json.dumps({'v': [None, None, None, None, None, None, None, None]}),
-                    'exit_ats': json.dumps({'v': [None, None, None, None, None, None, None, None]})
+                    'enter_ats': json.dumps({'v': [None for i in range(max(RACE.num_nodes,8))]}),
+                    'exit_ats': json.dumps({'v': [None for i in range(max(RACE.num_nodes,8))]})
                 })
             restore_table(Database.RaceClass, raceClass_query_data, defaults={
                     'name': 'New class',

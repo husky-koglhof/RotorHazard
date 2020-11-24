@@ -6,7 +6,7 @@ from flask_sqlalchemy import SQLAlchemy
 
 DB = SQLAlchemy()
 
-DEF_TEAM_NAME = 'A'  # default team
+DEF_TEAM_NAME = 'Guest'  # default team
 PILOT_ID_NONE = 0  # indicator value for no pilot configured
 HEAT_ID_NONE = 0  # indicator value for practice heat
 CLASS_ID_NONE = 0  # indicator value for unclassified heat
@@ -20,6 +20,26 @@ CLASS_ID_NONE = 0  # indicator value for unclassified heat
 # heat 1-N node
 # round 1-N heat
 
+class UserPilot(DB.Model):
+    __tablename__ = 'user_pilot'
+    id = DB.Column(DB.Integer, nullable=False, primary_key=True)
+    user_id = DB.Column(DB.Integer, nullable=False)
+    pilot_id = DB.Column(DB.Integer, nullable=False)
+
+# class ProfileUser(DB.Model):
+#    __tablename__ = 'profiles_users'
+#    id = DB.Column(DB.Integer, nullable=False, primary_key=True)
+#    user_id = DB.Column(DB.Integer, nullable=False)
+#    profile_id = DB.Column(DB.Integer, nullable=False)
+#    active = DB.Column(DB.Integer, nullable=False)
+
+class Team(DB.Model):
+    __tablename__ = 'team'
+    id = DB.Column(DB.Integer, primary_key=True)
+    name = DB.Column(DB.String(80), nullable=False)
+
+    def __repr__(self):
+        return '<Team %r>' % self.id
 class Pilot(DB.Model):
     __tablename__ = 'pilot'
     id = DB.Column(DB.Integer, primary_key=True)

@@ -247,9 +247,10 @@
 	<p>{{ __('Loading...') }}</p>
 </div>
 
+{% if user.is_authenticated %}
 {% if Debug %}
 <p><button class="debug button-like clean-cache">{{ __('Clean Cache') }}</button></p>
 {% endif %}
-
+{% endif %}
 </main>
 {% endblock %}

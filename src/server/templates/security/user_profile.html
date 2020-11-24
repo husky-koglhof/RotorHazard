@@ -1,0 +1,501 @@
+{% extends "layout.html" %} {% block title %}Run{% endblock %}{% block head %}
+{% include "security/base.html" %}
+
+{% block pagestyles %}
+  <link href="{{ url_for('static', filename='security/css/account.css') }}" rel="stylesheet" type="text/css">
+{% endblock %}
+
+<script type="text/javascript">
+    var data_dependencies = [
+        {% if request == "administration" %}
+        'user_data',
+        {% else %}
+        'current_user',
+        {% endif %}
+        'all_users',
+    ];
+    
+	$(document).ready(function () {
+        var pilot_data = [];
+
+        const alertButton=document.querySelector('.alert button');
+        if(alertButton){
+            alertButton.addEventListener('click',function(event){
+                event.preventDefault();
+                alertButton.parentNode.style.display='none';
+            },false);
+        }
+
+        function resetPage() {
+            $('#username').val("");
+            $('#username').hide();
+
+            $('#userid').val("");
+
+            $('.confirmDelete').hide();
+            $('.userContent').hide();
+
+            $('.userContent').hide();
+            $('.teams').hide();
+
+            $('.pilots').hide();
+            $('.pilot_label').hide();
+
+            $('.user_data').hide();
+            $('.pilot_data').hide();
+
+            if ($('#roles').is(':visible')) $('.roles_label').click();
+            if ($('#actions').is(':visible')) $('.actions_label').click();
+            if ($('.pilot_data').is(':visible')) $('.pilot_label').click();
+            if ($('.user_data').is(':visible')) $('.user_label').click();
+            
+            $('#password').val("");
+            $('#password_confirm').val("");
+            $('#adminpassword').val("");
+            {% if request == "administration" %}
+            $('.confirmedUser').hide();            
+            $('#deleteUser')[0].checked = false;
+            {% endif %}
+            $('#actualuser').val(-1);
+        }
+
+        socket.on('all_users', function(msg) {
+            {% if request == "administration" %}
+            $('#actualuser').empty();
+            $('#actualuser').append('<option value="-1" selected>' + __('Please select...') + '</option>');
+            for (var i = 0; i < msg.users.length; i++) {
+                var id = msg.users[i].id;
+                var name = msg.users[i].name;
+                if (id > 1) {
+                    $('#actualuser').append('<option value="' + id + '">' + name + '</option>');
+                }
+            }
+            $('#actualuser').append('<option value="0">' + __('Create new...') + '</option>');
+            {% else %}
+            $('#actualuser').hide();
+            $('#callsign').attr('placeholder', "");
+            socket.emit('getUser', {'user_id': msg.users[0].id});
+            {% endif %}
+        })
+
+        socket.on('user_data', function (msg) {
+            // Need this if changing pilot, we must know the correct callsign
+            pilot_data = msg._pilots;
+            resetPage();
+
+            $('#actualuser').val(msg._userid);
+
+            $('#username').val(msg._username);
+            $('#userid').val(msg._userid);
+            
+            if (msg._username == "") {
+                $('#username').show();
+                $('#submit').val("Create");
+                $('.submit')[0].style = "background-color: green !important;width: 45%;";
+            } else {
+                $('#username').hide();
+                $('#submit').val("Save");
+            }
+            $('.userContent').show();
+            $('.teams').show();
+
+            $('.pilots').show();
+            $('.pilot_label').hide();
+
+            $('.roles_label').html("&#8594; Roles"); 
+            $('.actions_label').html("&#8594; Actions");
+            $('.pilot_label').html("&#8594; Pilot");
+            $('.user_label').html("&#8594; User");
+            
+            if (msg._pilot) {
+                $('#callsign').val(msg._callsign);
+                $('#callsign').attr('placeholder', msg._callsign == "" ? msg._username : msg._callsign);
+                $('#team').val(msg._team);
+            } else {
+                $('.teams').hide();
+                $('.pilots').hide();
+            }
+
+            {% if request == "administration" %}
+            $('#confirmed_at').text(msg._confirmed_at);
+            $('#lockedUser')[0].checked = !msg._active;
+            $('#lockedUser').val(!msg._active);
+            $('.confirmedUser').show();
+            if (msg._confirmed_at != "") {
+                $('.confirmedUser').hide();
+            }
+            {% endif %}
+            $('#email').val(msg._email);
+            
+            if (msg._userid == 1) {
+                $('.flaggy').hide();
+            }
+
+            $('#teams').empty();
+            for (var i = 0; i < msg._teams.length; i++) {
+                $('#teams').append('<option value="' + msg._teams[i] + '"' + (msg._team == msg._teams[i] ? 'selected' : "") + '>' + msg._teams[i] + '</option>');
+            }
+
+            $('#pilots').empty();
+            $('#pilots').append('<option value="-1" selected>' + __('No Pilot set') + '</option>');
+            for (var i = 0; i < msg._pilots.length; i++) {
+                var id = msg._pilots[i].id;
+                var name = msg._pilots[i].name;
+                var callsign = msg._pilots[i].callsign;
+                var disabled = msg._pilots[i].disabled ? "disabled" : "";
+                $('#pilots').append('<option ' + disabled + ' value="' + id + '"' + (msg._pilot == id ? 'selected' : "") + '>' + name + " (" + callsign + ")" + '</option>');
+            }
+            $('#pilots').append('<option value="0">' + __('Create New Pilot...') + '</option>');
+
+            $('#roles').empty();
+            $('#roles').hide();
+            $('#actions').hide();
+            $('.user_data').hide();
+            $('.pilot_data').hide();
+
+            $('.submit')[0].disabled = true;
+            // -- $('#confirmDelete').hide();
+
+            $('.pilot_label').hide();
+            for (var i = 0; i < msg._all_roles.length; i++) {
+                if (msg._roles.includes(msg._all_roles[i])) {
+                    checked = "checked";
+                } else {
+                    checked = "";
+                }
+                {% if request == "administration" %}
+                disabled = "";
+                {% else %}
+                disabled = "disabled";
+                {% endif %}
+                $('#roles').append('<input id="' + msg._all_roles[i] + '"' + checked + ' ' + disabled + ' type="checkbox" class="permissions" value="' + msg._all_roles[i] + '" title="' + msg._all_roles[i] + '">' + msg._all_roles[i] + '<br>');
+
+                if (msg._roles[i] == 'pilot') {
+                    $('.pilot_label').show();
+                }
+            }
+            // If "Create new..."
+            if ($('#actualuser').val() == 0) {
+                $('.user_label').click();
+                $('#lockedUser')[0].checked = false;
+                $('#confirmUser')[0].checked = true;
+                $('.permissions')[5].checked = true;
+            }
+
+            if ($('#actualuser:hidden')) {
+                $('#username').show();
+            }
+
+            $(".permissions").on("change", function() {
+                $('.submit')[0].disabled = false;
+                var name = $(this).val();
+                var check = $(this).prop('checked');
+                if (name == 'pilot') {
+                    check ? $('.pilot_label').show() : $('.pilot_label').hide();
+                }
+                if (name == 'admin') {
+                    if (check) {
+                        $(".permissions")[1].disabled = true;
+                        $(".permissions")[2].disabled = true;
+                        $(".permissions")[3].disabled = true;
+                        $(".permissions")[4].disabled = true;
+                        $(".permissions")[5].disabled = true;
+
+                        $(".permissions")[1].checked = false;
+                        $(".permissions")[2].checked = false;
+                        $(".permissions")[3].checked = false;
+                        $(".permissions")[4].checked = false;
+                        $(".permissions")[5].checked = false;
+                    } else {
+                        $(".permissions")[1].disabled = false;
+                        $(".permissions")[2].disabled = false;
+                        $(".permissions")[3].disabled = false;
+                        $(".permissions")[4].disabled = false;
+                        $(".permissions")[5].disabled = false;
+                    }
+                }
+            });
+        });
+
+        $(':input:text').on('input propertychange', function() {
+            if(this.value.length > 0) {
+                $('.submit')[0].disabled = false;
+            } else {
+                $('.submit')[0].disabled = true;
+            }
+        });
+
+        $('#teams').change(function(msg) {
+            $('.submit')[0].disabled = false;
+        });
+
+        $('#pilots').change(function(msg) {
+            $('.submit')[0].disabled = false;
+            var id = $(this).val();
+            var pilot;
+            for (var i = 0; i < pilot_data.length; i++) {
+                if (pilot_data[i].id == id) {
+                    pilot = pilot_data[i];
+                    break;
+                }
+            }
+
+            if (id > 0) {
+                $('#callsign').val(pilot.callsign);
+                $('#callsign').attr('placeholder', pilot.callsign);
+            } else {
+                $('#callsign').val("");
+                $('#callsign').attr('placeholder', $('#username').val());
+            }
+        });
+
+        /* Actions to active submit buttons */
+        $(':input:password').on('input propertychange', function() {
+            if(this.value.length > 0) {
+                $('.submit')[0].disabled = false;
+            } else {
+                $('.submit')[0].disabled = true;
+            }
+        });
+
+        $('#deleteUser').bind('change', function(msg) {
+            $('.submit')[0].disabled = true;
+            if($(this).is(":checked")) {
+                // We must show password field, so we can really delete this user
+                $('.confirmDelete').show();
+                $('.submit')[0].value = "Delete";
+                $('.submit')[0].style = "background-color: red !important;width: 45%;";
+            } else {
+                $('.confirmDelete').hide();
+                $('.submit')[0].value = "Save";
+                $('.submit')[0].style = "width: 45%;";
+            }
+        });
+
+        $('#lockedUser').bind('change keyup', function(msg) {
+            var btn = false;
+            if($(this).is(":checked")) {
+                $(this).val(true);
+                btn = true;
+            } else {
+                $(this).val(false);
+                btn = false;
+            }
+
+            if (msg.target.value.length > 0) {
+                btn = false;
+            } else {
+                btn = true;
+            }
+
+            $('.submit')[0].disabled = btn;
+        });
+        /* Actions to active submit buttons */
+
+        $('.user_label').click(function (event) {
+            $('.user_data').toggle();
+            if ($('.user_data').is(':visible')) {
+                $('.user_label').html("&#8595; User"); 
+            } else {
+                $('.user_label').html("&#8594; User"); 
+            }
+        });
+
+        $('.pilot_label').click(function (event) {
+            $('.pilot_data').toggle();
+            if ($('.pilot_data').is(':visible')) {
+                $('.pilot_label').html("&#8595; Pilot"); 
+            } else {
+                $('.pilot_label').html("&#8594; Pilot"); 
+            }
+        });
+
+        $('.roles_label').click(function (event) {
+            $('#roles').toggle();
+            if ($('#roles').is(':visible')) {
+                $('.roles_label').html("&#8595; Roles"); 
+            } else {
+                $('.roles_label').html("&#8594; Roles"); 
+            }
+        });
+
+        $('.actions_label').click(function (event) {
+            $('#actions').toggle();
+            if ($('#actions').is(':visible')) {
+                $('.actions_label').html("&#8595; Actions"); 
+            } else {
+                $('.actions_label').html("&#8594; Actions"); 
+            }
+        });
+
+        $('#actualuser').change(function (event) {
+            if ($(this).val() == 0) {
+                $('.deletedUser').hide();
+            } else {
+                $('.deletedUser').show();
+            }
+
+            var data = {
+                user_id: parseInt($(this).val())
+            };
+            if (data.user_id >= 0) {
+                socket.emit('getUser', data);
+            } else {
+                resetPage();
+            }
+            $('.alert').hide();
+        });
+/*
+        $('#confirmDelete').click(function (event) {
+            var data = {
+                id: $('#userid').val(),
+                action: 'delete',
+                password_confirm: $('#adminpassword').val(),
+            }
+            socket.emit('saveUserData', data);
+            resetPage();
+        });
+*/
+        $('#submit').click(function (event) {
+            if ($(this).val() == "Delete") {
+                var data = {
+                    id: $('#userid').val(),
+                    action: 'delete',
+                    password_confirm: $('#adminpassword').val(),
+                }
+            } else {
+                var roles = [];
+                for (var i = 0; i < $('.permissions').length; i++) {
+                    var obj = $('.permissions')[i];
+                    var name = obj.value;
+                    var value = obj.checked;
+                    if (value) roles.push(name);
+                }
+
+                var data = {
+                    id: $('#userid').val(),
+                    username: $('#username').val(),
+                    email: $('#email').val(),
+                    callsign: $('#callsign').val(),
+                    team: $("#teams option:selected").text(),
+                    password: $('#password').val(),
+                    password_confirm: $('#password_confirm').val(),
+                    roles: roles,
+                    {% if request == "adminstration" %}
+                    lockedUser: $('#lockedUser')[0].checked,
+                    confirmUser: $('#confirmUser')[0].checked,
+                    {% else %}
+                    lockedUser: false,
+                    confirmUser: false,
+                    {% endif %}
+                    pilot: $('#pilots option:selected').val(),
+                    action: '',
+                };
+            }
+            socket.emit('saveUserData', data);
+            resetPage();
+        });
+
+        $('#roles').off('click');
+
+    });
+</script>
+
+{% endblock %} {% block content %}
+<div class="login-page">
+    <div class="form-wrapper">
+
+    <div class="alert alert-warning" style="display: none;">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        <div id=usermessage></div>
+    </div>
+      
+    <fieldset class="email">
+        <label class="label">Username</label>
+        <select class="textfield" id=actualuser>
+            Loading...
+        </select>
+        <input class="textfield" name=username value="" id=username hidden placeholder="New Username">
+        <input type=hidden name=userid id=userid>
+    </fieldset>
+
+    <div class=userContent hidden>
+        <label class="pilot_label label">Pilot</label>
+        <div class="pilot_data" hidden>
+            <fieldset class="email flaggy teams">
+                <label class="label">Callsign</label>
+                <input class="textfield" id=callsign name=callsign>
+            </fieldset>
+
+            <fieldset class="email flaggy teams">
+                <label class="label">Team</label>
+                <select class=textfield id=teams name="teams">
+                    <option>{{ __('Loading...') }}</option>
+                </select>
+            </fieldset>
+
+            <fieldset class="email flaggy teams">
+                <label class="label">Assign Pilot</label>
+                <select class=textfield id=pilots name="pilots">
+                    <option>{{ __('Loading...') }}</option>
+                </select>
+            </fieldset>
+        </div>
+
+        <label class="user_label label">User</label>
+        <div class="user_data" hidden>
+            <fieldset class="email">
+                <label class="label">E-Mail</label>
+                <input class="textfield" id=email name=email placeholder="youremail@example.com">
+            </fieldset>
+
+            <fieldset class="password">
+                <label class="label">Password</label>
+                <input id="password" type="password" name="password">
+
+                <fieldset class="confirm">
+                    <label class="label">Confirm Password</label>
+                    <input id="password_confirm" type="password" name="password_confirm">
+                </fieldset>
+            </fieldset>
+            {% if request == "administration" %}
+            <fieldset class="email flaggy">
+                <label class="label">Confirmed</label>
+                <label class="textfieldro" id="confirmed_at"></label>
+            </fieldset>
+            {% endif %}
+        </div>        
+
+        <fieldset class="email flaggy">
+            <label class="roles_label label">&#8595; Roles</label>
+            <div class="textfieldro" id=roles hidden>
+                {{ __('Loading...') }}
+            </div>
+        </fieldset>
+
+        {% if request == "administration" %}
+        <fieldset class="email flaggy">
+            <label class="actions_label label">Actions</label>
+            <div class=textfieldro id=actions hidden>
+                <input name="lockedUser" id=lockedUser type="checkbox" title="User is locked">User is locked<br>
+                <div class="confirmedUser"><input id=confirmUser name="confirmUser" type="checkbox" value="confirmUser" title="User is confirmed">Confirm User<br></div>
+                <div class="deletedUser"><input id=deleteUser name="deleteUser" type="checkbox" value="deleteUser" title="Delete User">Delete User<br></div>
+            </div>
+        </fieldset>
+        {% endif %}
+
+        <fieldset class="password confirmDelete">
+            <label class="label">Confirm with your Password</label>
+            <input id="adminpassword" type="password" name="adminpassword">
+        </fieldset>
+
+        <div class="submit-button">
+            <nobr>
+                <input id=submit class="submit" name="submit" type="submit" value="Save" style="width:45%">
+            </nobr>
+        </div>
+    </div>
+    </div>
+</div>
+<!--{% include "security/_menu.html" %}-->
+{% endblock %}

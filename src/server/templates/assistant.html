@@ -1,0 +1,482 @@
+{% extends "layout.html" %} {% block title %}Run{% endblock %}{% block head %}
+
+<script type="text/javascript" charset="utf-8">
+	var data_dependencies = [
+		'all_languages',
+		'language',
+		'node_data',
+		'frequency_data',
+		'heat_data',
+		'pilot_data',
+		'race_format',
+		'node_tuning',
+		'enter_and_exit_at_levels',
+		'min_lap',
+		'leaderboard',
+		'current_laps',
+		'race_status',
+		'team_racing_stat_if_enb',
+		'led_effects',
+		'callouts',
+		'cluster_status',
+		'vrx_list'
+	];
+
+	$(document).ready(function () {
+        $('#heat_1_node_0').change(function(){
+            var answer = confirm(__('Standard laden?'));
+            if (answer) {
+                // some code
+
+                var today = new Date();
+                var dd = String(today.getDate()).padStart(2, '0');
+                var mm = String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+                var yyyy = today.getFullYear();
+
+                today = dd + '.' + mm + '.' + yyyy;
+                $('.heat-note-1').empty();
+                var e = $('#heat_1_node_0')[0];
+                var strUser = e.options[e.selectedIndex].text;
+
+                document.getElementById("heat-note-1").value = today + " - " + strUser;
+
+                var useTeams = confirm(__('Ist dies ein Teamlauf?'));
+                if (useTeams) {
+                    document.getElementById("set_race_format").options.selectedIndex = 1;
+                } else {
+                    document.getElementById("set_race_format").options.selectedIndex = 0;
+                }
+
+                document.getElementById('set_profile').options.selectedIndex = 2;
+            } else {
+                // some code
+                alert(false);
+            }
+        });
+
+        if (true) return;
+        socket.on('language', function (msg) {
+			$('#set_language').empty();
+			$('#set_language').append('<option value="">English</option>')
+			for (i = 0; i < msg.languages.length; i++) {
+				$('#set_language').append('<option value="' + msg.languages[i].id +'">' + msg.languages[i].name + '</option>')
+			}
+
+			$('#set_voice_string_language').empty();
+			$('#set_voice_string_language').append('<option value="match-timer">' + __('(Match Timer Language)') + '</option>')
+			$('#set_voice_string_language').append('<option value="">English</option>')
+			for (i = 0; i < msg.languages.length; i++) {
+				$('#set_voice_string_language').append('<option value="' + msg.languages[i].id +'">' + msg.languages[i].name + '</option>')
+			}
+			$('#set_voice_string_language').val(rotorhazard.voice_string_language);
+
+			if (msg.language) {
+				rotorhazard.interface_language = msg.language;
+				$('#set_language').val(msg.language);
+			} else {
+				$('#set_language').selectedIndex = 0;
+			}
+		});
+
+        socket.on('heat_data', function (msg) {
+            console.log('heat_data called');
+            console.log(msg);
+
+            rotorhazard.heats = msg.heats;
+			$('#set_current_heat').empty();
+			for (var i in msg.heats) {
+				var heat = msg.heats[i];
+
+				if (heat.note) {
+					var heatname = heat.note;
+				} else {
+					var heatname = __('Heat') + ' ' + heat.heat_id;
+				}
+				rotorhazard.heats[i].heatname = heatname;
+
+				var opt = $('<option value="' + heat.heat_id + '" data-class="' + heat.class_id + '">');
+
+				opt.html(heatname);
+				$('#set_current_heat').append(opt);
+            }
+
+            socket.emit('load_data', {'load_types': [
+				'current_heat',
+            ]});
+
+            // husky-koglhof
+            $(".heats").empty();
+			for (var i in msg.heats) {
+                if (i == rotorhazard.current_heat) {
+                    var heats = msg.heats[i];
+
+                    if (heats.note) {
+                        heat_note = heats.note
+                    } else {
+                        heat_note = __('Heat') + ' ' + heats.heat_id
+                    }
+                    var el = $('<li style="width:100%">');
+
+                    var nodelist = $('<ol>');
+
+                    // nodes
+                    for (j in heats.pilots) {
+                        var heatpilot = heats.pilots[j];
+                        var slot = $('<li>');
+                        slot.append('<div class="channel-block" data-node="' + j + '"><span class="ch"></span> <span class="fr"></span></div>');
+                        var pilot = $('<div class="pilot-name">');
+                        // pilot selectors
+                        var selectbox = $('<select class="set_pilot_position" id="heat_' + heats.heat_id + '_node_' + j + '" data-heat="' + heats.heat_id + '" data-node="' + j + '" >')
+                        selectbox.append('<option value="0">None</option>')
+						for (var k in msg.pilot_data) {
+							if (msg.pilotSort == 'callsign') {
+								selectbox.append('<option value="' + msg.pilot_data[k].pilot_id + '">' + msg.pilot_data[k].callsign + ' (' + msg.pilot_data[k].name + ')</option>')
+
+							} else {
+								selectbox.append('<option value="' + msg.pilot_data[k].pilot_id + '">' + msg.pilot_data[k].name + ' (' + msg.pilot_data[k].callsign + ')</option>')
+							}
+						}
+
+                        selectbox.val(heatpilot);
+                        selectbox.prop('disabled', heats.locked);
+                        pilot.append(selectbox);
+                        slot.append(pilot);
+                        nodelist.append(slot);
+                    }
+                    el.append(nodelist);
+
+                    el.appendTo($('.heats'));
+                }
+			}
+            freq.updateBlocks();
+            socket.emit('current_heat');
+            console.log('done');
+		});
+
+		socket.on('current_heat', function (msg) {
+			rotorhazard.current_heat = msg.current_heat;
+			$('#set_current_heat').val(msg.current_heat);
+
+			rotorhazard.current_pilots = msg.pilot_ids;
+			for (i = 0; i < msg.callsign.length; i++) {
+				$('.callsign_' + i).html(msg.callsign[i] ? msg.callsign[i] : 'None');
+			}
+			if (msg.heat_format) {
+				$('#set_race_format').val(msg.heat_format);
+				$('#set_race_format').trigger('change');
+				$('#set_race_format').prop('disabled', true);
+			} else {
+				$('#set_race_format').prop('disabled', false);
+            }
+            
+            // husky-koglhof
+            $(".heats").empty();
+			for (var i in rotorhazard.heats) {
+                if (i == rotorhazard.current_heat) {
+                    var heats = rotorhazard.heats[i];
+
+                    if (heats.note) {
+                        heat_note = heats.note
+                    } else {
+                        heat_note = __('Heat') + ' ' + heats.heat_id
+                    }
+                    var el = $('<li style="width:100%">');
+
+                    var nodelist = $('<ol>');
+
+					var colors = ['#001fff', '#ff3f00', '#7fff00', '#ffff00', '#7f00ff', '#ff007f', '#3fff3f', '#00bfff'];
+
+                    // nodes
+                    for (j in heats.pilots) {
+                        var heatpilot = heats.pilots[j];
+                        var slot = $('<li>');
+                        slot.append('<div class="channel-block" data-node="' + j + '"><span style="background-color:' + colors[j] + '">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="ch"></span> <span class="fr"></span></div>');
+                        var pilot = $('<div class="pilot-name">');
+                        // pilot selectors
+                        var selectbox = $('<select class="set_pilot_position" id="heat_' + heats.heat_id + '_node_' + j + '" data-heat="' + heats.heat_id + '" data-node="' + j + '" >')
+                        selectbox.append('<option value="0">None</option>')
+						for (var k in rotorhazard.pilot_data) {
+							selectbox.append('<option value="' + rotorhazard.pilot_data[k].pilot_id + '">' + rotorhazard.pilot_data[k].callsign + (rotorhazard.race_formats.team_racing_mode ? ' (' + rotorhazard.pilot_data[k].team  + ')' : "") + '</option>');
+							// TODO: Add Team Data too
+							//  + rotorhazard.pilot_data[k].team_options
+						}
+                        selectbox.val(heatpilot);
+                        selectbox.prop('disabled', heats.locked);
+                        pilot.append(selectbox);
+                        slot.append(pilot);
+                        nodelist.append(slot);
+					}
+                    el.append(nodelist);
+
+                    el.appendTo($('.heats'));
+                }
+			}
+            freq.updateBlocks();
+        });
+
+        		/* Callouts */
+		/* Pilots */
+        socket.on('pilot_data', function (msg) {
+            rotorhazard.pilot_data = msg.pilots;
+ 
+			$(".pilots").empty();
+			for (var i in msg.pilots) {
+				var pilot = msg.pilots[i];
+				if (pilot.pilot_id != 0) {
+					var el = $('<li data-id="' + pilot.pilot_id + '">');
+					el.append('<label for="name_' + pilot.pilot_id + '" class="screen-reader-text">' + __('Name') + '</label>');
+					el.append('<input type="text" class="set_pilot_name" id="name_' + pilot.pilot_id + '" data-pilot_id="' + pilot.pilot_id + '" value="' + pilot.name + '" placeholder="' + __('Name') +'">');
+					el.append('<label for="callsign_' + pilot.pilot_id + '" class="screen-reader-text">' + __('Callsign') + '</label>');
+					el.append('<input type="text" class="set_pilot_callsign" id="callsign_' + pilot.pilot_id + '" data-pilot_id="' + pilot.pilot_id + '" value="' + pilot.callsign + '" placeholder="' + __('Callsign') +'">');
+					el.append('<label for="phonetic_' + pilot.pilot_id + '" class="screen-reader-text">' + __('Phonetic') +'</label>');
+					var phonetic = $('<div class="phonetic">');
+					phonetic.append('<input type="text" class="set_pilot_phonetic" id="phonetic_' + pilot.pilot_id + '" data-pilot_id="' + pilot.pilot_id + '" value="' + pilot.phonetic + '" placeholder="' + __('Phonetic') + '">');
+					phonetic.append('<button class="speak_pilot" data-pilot_id="' + pilot.pilot_id + '">&#9658;&#65038; <span class="screen-reader-text">' + __('Play') + '</span></button>');
+					el.append(phonetic);
+					el.append('<div class="pilot-team"><label for="set_pilot_team_' + pilot.pilot_id + '">' + __('Team') + '</label><select class="set_pilot_team" id="set_pilot_team_' + pilot.pilot_id + '" data-pilot_id="' + pilot.pilot_id + '">' + pilot.team_options + '</select></div>');
+
+					if (!pilot.locked) {
+						el.append('<button class="delete_pilot btn-danger" data-id="' + pilot.pilot_id + '" title="Delete Pilot ' + pilot.callsign + '">&#215;</button>');
+					}
+
+					el.appendTo($('.pilots'));
+				}
+			}
+
+			msg.pilots.sort(function(a, b){
+				if (a.name < b.name)
+					return -1;
+				if (a.name > b.name)
+					return 1;
+				return 0;
+			});
+
+			$('.set_pilot_position').each(function(){
+				$(this).empty();
+
+				for (var i in msg.pilots) {
+					$(this).append('<option value="'+ msg.pilots[i].id + '">' + msg.pilots[i].callsign + ' (' + msg.pilots[i].name + ')</option>');
+				}
+            });
+        });
+    });
+</script>
+{% endblock %} {% block content %}
+
+<main class="assistant">
+    <div id="main_panel" class="panel" tabindex="1">
+        <div class="panel-content full-width">
+            <div class="timer">
+                <div class="timing-clock"><div class="warning" title="Browser Sync Loss">&#9888;&#xFE0E;</div>
+                    <div class="time-display">
+                        Step <span style="color:green">1</span><span style="color:red">2</span><span style="color:red">3</span><span style="color:red">4</span><span style="color:red">5</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel collapsing">
+        <div class="panel-header">
+            <h2>{{ __('Rennleiter') }}</h2>
+        </div>
+        <div class="panel-content">
+            <select class="set_pilot_position" id="heat_1_node_0" data-heat="1" data-node="0">
+                <option value="0">None</option><option value="1">Hottie (Baumgartner)</option>
+                <option value="10">Neela (Baumgartner)</option>
+                <option value="15">Maxl (Hirzberger)</option>
+                <option value="7">Dominik (Ehgartner)</option>
+                <option value="4">Markus (Ehgartner)</option>
+                <option value="5">Maxi (Gast)</option>
+                <option value="8">Gast 1 (Gast)</option>
+                <option value="9">Gast 2 (Gast)</option>
+                <option value="17">Marcel (Nistelberger)</option>
+                <option value="13">Hirzi (Hirzberger)</option>
+                <option value="16">Nisti (Nistelberger)</option>
+                <option value="14">Kerstin (Hirzberger)</option>
+                <option value="19">Lorenz (Hirzberger)</option>
+                <option value="11">Putz Max (Putz)</option>
+                <option value="12">Philipp (Putz)</option>
+                <option value="3">Martin (Gast)</option>
+                <option value="6">Michi (Gast)</option>
+                <option value="20">Jonas (Gast)</option>
+                <option value="2">Thomas (Gast)</option>
+                <option value="18">Schneemann (Gast)</option>
+            </select>
+        </div>
+    </div>
+    <div class="panel collapsing">
+        <div class="panel-header">
+            <h2>{{ __('Heat') }}</h2>
+        </div>
+        <div class="panel-content">
+            <ol id="heat_data" class="heats item-blocks">
+                <li style="width:100%">{{ __('Loading...') }}</li>
+                <li style="width: calc(100% - 0.5em);">
+                    <h3>Name des aktuellen Rennen</h3>
+                    <input type="text" id="heat-note-1" class="set_heat_note" data-heat="1" placeholder="12.11.2020 - Baumgartner" maxlength="80">
+                </li>
+            </ol>
+        </div>
+    </div>
+    <div class="panel collapsing">
+        <div class="panel-header">
+            <h2>{{ __('Teams') }}</h2>
+        </div>
+        <div class="panel-content">
+            <ol id="team_data" class="heats">
+                <li style="width:100%">{{ __('Loading...') }}</li>
+                <div class="control-set" style="width:100%">
+                    <select id="set_race_format">
+                        <option value="14">Kein Teamrennen</option>
+                        <option value="15">Baumgartner</option>
+                        <option value="15">Hirzberger</option>
+                        <option value="15">Nistelberger</option>
+                        <option value="15">Ehgartner</option>
+                    </select>
+                    <button id="add_race_format" title="Neues Team">+</button>
+                    <button class="btn-danger open-mfp-popup" id="delete_race_format_button" data-mfp-src="#format_delete_confirm" title="Entfernen">×</button>
+                </div>
+            </ol>
+        </div>
+    </div>
+    <div class="panel collapsing active">
+        <div class="panel-header">
+            <h2><button class="no-style">{{'Pilots'}}</button></h2>
+        </div>
+        <div class="panel-content" style="display: none;">
+            <div class="control-set">
+                <label for="set_profile">Profil:</label>
+                <select id="set_profile"><option value="1">Band B</option>
+                    <option value="3">Band A</option>
+                    <option value="4">Baumgartner</option>
+                    <option value="5">Hirzberger</option>
+                    <option value="6">Nistelberger</option>
+                </select>
+            </div>
+    
+            <ol class="form">
+                <li>
+                    <div class="label-block">
+                        <label for="set_profile_name">Name</label>
+                    </div>
+                    <input type="text" id="set_profile_name">
+                </li>
+            </ol>
+   
+            <div class="node-list">
+                
+                    <div class="node" data-node="0">
+                        
+                        <h3><label for="set_freq_node_0">Node 1</label></h3>
+                        <select class="frequency_table" id="f_table_0" data-node="0"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_0" class="screen-reader-text">Frequency</label>
+<!--
+                            <input type="number" id="s_channel_0" class="set_frequency" data-node="0" min="5000" max="6001">
+-->
+                        <select class="set_pilot_position" id="pilot_frequence" data-heat="1" data-node="0">
+                            <option value="0">None</option><option value="1">Hottie (Baumgartner)</option>
+                            <option value="10">Neela (Baumgartner)</option>
+                            <option value="15">Maxl (Hirzberger)</option>
+                            <option value="7">Dominik (Ehgartner)</option>
+                            <option value="4">Markus (Ehgartner)</option>
+                            <option value="5">Maxi (Gast)</option>
+                            <option value="8">Gast 1 (Gast)</option>
+                            <option value="9">Gast 2 (Gast)</option>
+                            <option value="17">Marcel (Nistelberger)</option>
+                            <option value="13">Hirzi (Hirzberger)</option>
+                            <option value="16">Nisti (Nistelberger)</option>
+                            <option value="14">Kerstin (Hirzberger)</option>
+                            <option value="19">Lorenz (Hirzberger)</option>
+                            <option value="11">Putz Max (Putz)</option>
+                            <option value="12">Philipp (Putz)</option>
+                            <option value="3">Martin (Gast)</option>
+                            <option value="6">Michi (Gast)</option>
+                            <option value="20">Jonas (Gast)</option>
+                            <option value="2">Thomas (Gast)</option>
+                            <option value="18">Schneemann (Gast)</option>
+                        </select>
+                    </div>
+                
+                    <div class="node" data-node="1">
+                        
+                        <h3><label for="set_freq_node_1">Node 2</label></h3>
+                        <select class="frequency_table" id="f_table_1" data-node="1"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_1" class="screen-reader-text">Frequency</label>
+                        <input type="number" id="s_channel_1" class="set_frequency" data-node="1" min="5000" max="6001">
+                    </div>
+                
+                    <div class="node" data-node="2">
+                        
+                        <h3><label for="set_freq_node_2">Node 3</label></h3>
+                        <select class="frequency_table" id="f_table_2" data-node="2"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_2" class="screen-reader-text">Frequency</label>
+                        <input type="number" id="s_channel_2" class="set_frequency" data-node="2" min="5000" max="6001">
+                    </div>
+                
+                    <div class="node" data-node="3">
+                        
+                        <h3><label for="set_freq_node_3">Node 4</label></h3>
+                        <select class="frequency_table" id="f_table_3" data-node="3"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_3" class="screen-reader-text">Frequency</label>
+                        <input type="number" id="s_channel_3" class="set_frequency" data-node="3" min="5000" max="6001">
+                    </div>
+                
+                    <div class="node" data-node="4">
+                        
+                        <h3><label for="set_freq_node_4">Node 5</label></h3>
+                        <select class="frequency_table" id="f_table_4" data-node="4"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_4" class="screen-reader-text">Frequency</label>
+                        <input type="number" id="s_channel_4" class="set_frequency" data-node="4" min="5000" max="6001">
+                    </div>
+                
+                    <div class="node" data-node="5">
+                        
+                        <h3><label for="set_freq_node_5">Node 6</label></h3>
+                        <select class="frequency_table" id="f_table_5" data-node="5"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_5" class="screen-reader-text">Frequency</label>
+                        <input type="number" id="s_channel_5" class="set_frequency" data-node="5" min="5000" max="6001">
+                    </div>
+                
+                    <div class="node" data-node="6">
+                        
+                        <h3><label for="set_freq_node_6">Node 7</label></h3>
+                        <select class="frequency_table" id="f_table_6" data-node="6"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_6" class="screen-reader-text">Frequency</label>
+                        <input type="number" id="s_channel_6" class="set_frequency" data-node="6" min="5000" max="6001">
+                    </div>
+                
+                    <div class="node" data-node="7">
+                        
+                        <h3><label for="set_freq_node_7">Node 8</label></h3>
+                        <select class="frequency_table" id="f_table_7" data-node="7"><option value="0">Disabled</option><option value="5658">R1 5658</option><option value="5695">R2 5695</option><option value="5732">R3 5732</option><option value="5769">R4 5769</option><option value="5806">R5 5806</option><option value="5843">R6 5843</option><option value="5880">R7 5880</option><option value="5917">R8 5917</option><option value="5740">F1 5740</option><option value="5760">F2 5760</option><option value="5780">F3 5780</option><option value="5800">F4 5800</option><option value="5820">F5 5820</option><option value="5840">F6 5840</option><option value="5860">F7 5860</option><option value="5880">F8 5880</option><option value="5705">E1 5705</option><option value="5685">E2 5685</option><option value="5665">E3 5665</option><option value="5645">E4 5645</option><option value="5885">E5 5885</option><option value="5905">E6 5905</option><option value="5925">E7 5925</option><option value="5945">E8 5945</option><option value="5733">B1 5733</option><option value="5752">B2 5752</option><option value="5771">B3 5771</option><option value="5790">B4 5790</option><option value="5809">B5 5809</option><option value="5828">B6 5828</option><option value="5847">B7 5847</option><option value="5866">B8 5866</option><option value="5865">A1 5865</option><option value="5845">A2 5845</option><option value="5825">A3 5825</option><option value="5805">A4 5805</option><option value="5785">A5 5785</option><option value="5765">A6 5765</option><option value="5745">A7 5745</option><option value="5725">A8 5725</option><option value="5362">L1 5362</option><option value="5399">L2 5399</option><option value="5436">L3 5436</option><option value="5473">L4 5473</option><option value="5510">L5 5510</option><option value="5547">L6 5547</option><option value="5584">L7 5584</option><option value="5621">L8 5621</option><option value="5300">U0 5300</option><option value="5325">U1 5325</option><option value="5348">U2 5348</option><option value="5366">U3 5366</option><option value="5384">U4 5384</option><option value="5402">U5 5402</option><option value="5420">U6 5420</option><option value="5438">U7 5438</option><option value="5456">U8 5456</option><option value="5985">U9 5985</option><option value="5660">D1 5660</option><option value="5695">D2 5695</option><option value="5735">D3 5735</option><option value="5770">D4 5770</option><option value="5805">D5 5805</option><option value="5880">D6 5880</option><option value="5914">D7 5914</option><option value="5839">D8 5839</option><option value="5695">J1 5695</option><option value="5770">J2 5770</option><option value="5880">J3 5880</option><option value="n/a">N/A</option></select>
+                        <label for="s_channel_7" class="screen-reader-text">Frequency</label>
+                        <input type="number" id="s_channel_7" class="set_frequency" data-node="7" min="5000" max="6001">
+                    </div>
+                
+            </div>
+            <div class="control-set" id="imd_rating_label">IMD bewertung der Frequenzreihe (100=bestes): -686 &nbsp; <a href="/imdtabler">View with IMDTabler</a></div>
+            <div class="control-set vrx-warning"></div>
+        </div>
+    </div>
+
+    <div class="panel collapsing">
+        <div class="panel-header">
+            <h2><button class="no-style">Race Management</button></h2>
+        </div>
+        <div class="panel-content" style="">
+            <ol class="form">
+                <li>
+                    <select id="set_race_format"><option value="14">Qualifying 10 sec - Team</option><option value="15">Qualifying 10 sec - Einzel</option><option value="16">Training 10 sec - Einzel</option><option value="17">Training 10 sec - Team</option><option value="18">Rennen 10 sec - Team</option><option value="19">Rennen 10 sec - Einzel</option></select>
+                </li>
+            </ol>
+        </div>
+    </div>
+
+    <div class="control-set">
+        <button id="start_race" tabindex="-1" disabled=""><span class="narrow">Starten</span><span class="wide">Starten</span></button>
+        <button id="save_laps" tabindex="-1" disabled=""><span class="narrow">Speichern</span><span class="wide">Speichern</span></button>
+        <button id="discard_laps" tabindex="-1" disabled=""><span class="narrow">Verwerfen</span><span class="wide">Verwerfn</span></button>
+    </div>
+</main>
+{% endblock %}

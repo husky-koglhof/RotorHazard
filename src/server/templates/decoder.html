@@ -104,11 +104,6 @@
 
 			var heartbeatCounter = 0;
 
-			// set admin flag
-			rotorhazard.admin = true;
-			rotorhazard.saveData();
-			$('nav li').removeClass('admin-hide');
-
 			// populate audio controls
 			$('#beep_crossing_entered').prop("checked", rotorhazard.beep_crossing_entered);
 			$('#beep_crossing_exited').prop("checked", rotorhazard.beep_crossing_exited);

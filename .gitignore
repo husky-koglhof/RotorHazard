@@ -6,3 +6,8 @@ db_bkp
 logs
 /src/server/static/user/*
 !/src/server/static/user/README.md
+NeoPixelUDP*
+generateSALT*
+server copy*
+src/server/templates/*copy*
+src/server/templates/security/*copy*

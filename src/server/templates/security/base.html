@@ -1,0 +1,43 @@
+{% block doc -%}
+<!DOCTYPE html>
+<html dir="ltr" lang="en" {% block html_attribs %}{% endblock html_attribs %}>
+  {%- block html %}
+<head>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+    <title>{% block title %}{% endblock %}: {{ getOption("timerName") }}</title>
+    <meta name="description" content="Add user authentication to your Flask app."/>
+    <meta name="HandheldFriendly" content="True"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+    <meta name="theme-color" content="#5eb9d7"/>
+    <link rel="shortcut icon" href="{{ url_for('static', filename='dist/img/favicon.png') }}" type="image/x-icon"/>
+    <link href="https://fonts.googleapis.com/css?family=Poppins:200,300,500" rel="stylesheet"/>
+    {% block pagestyles %}{% endblock %}
+  </head>
+  <script type="text/javascript">
+    var data_dependencies = [
+        'user_data'
+    ];
+  </script>
+  
+  <body{% block body_attribs %}{% endblock body_attribs %}>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+    <script src="{{ url_for('static', filename='security/js/main.min.js') }}"></script>
+      {% block additionalscripts %}{% endblock %}
+      {% include 'security/analytics.html' %}
+<!-- ORIGINAL -->      
+    {% block body -%}
+      {% block navbar %}
+      {%- endblock navbar %}
+<!--
+      {% block contents -%}
+      {%- endblock contents %}
+-->
+      {% block scripts %}
+      {%- endblock scripts %}
+    {%- endblock body %}
+  </body>
+  {%- endblock html %}
+</html>
+{% endblock doc -%}

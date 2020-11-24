@@ -1,0 +1,59 @@
+{% extends "layout.html" %} {% block title %}Run{% endblock %}{% block head %}
+{% include "security/base.html" %}
+
+{% block pagestyles %}
+  <link href="{{ url_for('static', filename='security/css/account.css') }}" rel="stylesheet" type="text/css">
+{% endblock %}
+
+{% endblock %} {% block content %}
+<div class="login-page">
+    <div class="form-wrapper">
+
+    {% for message in get_flashed_messages() %}
+    <div class="alert alert-warning">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        {{ message }}
+    </div>
+    {% endfor %}
+
+    <form action="/profile" method="POST" name="user_profile_form">
+        <fieldset class="email">
+            <label class="label">Pilotname</label>
+            <input class="textfield" placeholder="{{user.calc_username()}}">{{ user.name }}</label>
+        </fieldset>
+
+        <fieldset class="email">
+            <label class="label">Callsign</label>
+            <input class="textfield" placeholder="{{user.calc_username()}}">{{ user.callsign }}</label>
+        </fieldset>
+
+        <fieldset class="email">
+            <label class="label">Team</label>
+            <select class=textfield>
+                {% for team in teams %}
+                    <option name={{ team.team }} value={{ team.team }}>{{ team.team }}</option>
+                {% endfor %}
+            </select>
+        </fieldset>
+
+        <fieldset class="email">
+            <label class="label">Heats</label>
+            <select class=textfield>
+                {% for heat in heats.query.all() %}
+                    <option name={{ heat.note }} value={{ heat.note }}>{{ heat.note }}</option>
+                {% endfor %}
+            </select>
+        </fieldset>
+
+        <div class="submit-button">
+            <nobr>
+                <input id="submit" name="submit" type="submit" value="Register" style="width:45%">
+                <input id="submit" name="submit" type="submit" value="Revert" style="background-color:red !important; color:black !important;width:45%;margin-left:9%">
+            </nobr>
+        </div>
+
+    </form>
+    </div>
+</div>
+<!--{% include "security/_menu.html" %}-->
+{% endblock %}

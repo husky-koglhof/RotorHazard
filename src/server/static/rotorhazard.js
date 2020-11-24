@@ -808,7 +808,6 @@ var rotorhazard = {
 	display_time_first_pass: false, //shows the timestamp of the lap since the first pass was recorded
 
 	min_lap: 0, // minimum lap time
-	admin: false, // whether to show admin options in nav
 	show_messages: true, // whether to display messages
 	graphing: false, // currently graphing RSSI
 	primaryPilot: -1, // restrict voice calls to single pilot (default: all)
@@ -859,7 +858,6 @@ var rotorhazard = {
 		localStorage['rotorhazard.schedule_s'] = JSON.stringify(this.schedule_s);
 		localStorage['rotorhazard.indicator_beep_volume'] = JSON.stringify(this.indicator_beep_volume);
 		localStorage['rotorhazard.min_lap'] = JSON.stringify(this.min_lap);
-		localStorage['rotorhazard.admin'] = JSON.stringify(this.admin);
 		localStorage['rotorhazard.primaryPilot'] = JSON.stringify(this.primaryPilot);
 		localStorage['rotorhazard.display_lap_id'] = JSON.stringify(this.display_lap_id);
 		localStorage['rotorhazard.display_time_start'] = JSON.stringify(this.display_time_start);
@@ -936,9 +934,6 @@ var rotorhazard = {
 			}
 			if (localStorage['rotorhazard.min_lap']) {
 				this.min_lap = JSON.parse(localStorage['rotorhazard.min_lap']);
-			}
-			if (localStorage['rotorhazard.admin']) {
-				this.admin = JSON.parse(localStorage['rotorhazard.admin']);
 			}
 			if (localStorage['rotorhazard.primaryPilot']) {
 				this.primaryPilot = JSON.parse(localStorage['rotorhazard.primaryPilot']);
@@ -1161,11 +1156,6 @@ rotorhazard.restoreData();
 
 if (typeof jQuery != 'undefined') {
 jQuery(document).ready(function($){
-	// display admin options
-	if (rotorhazard.admin) {
-		$('*').removeClass('admin-hide');
-	}
-
 	// populate SVG logo
 	$('.rh-logo').html(svg_asset.logo);
 
@@ -1289,6 +1279,21 @@ jQuery(document).ready(function($){
  				socket.connect();
 			}
 		}
+	});
+
+	/* Database Reset */
+	socket.on('route_to_login', function () {
+		window.location.reload();
+	});
+
+	socket.on('user_message', function (msg) {
+		console.log(msg);
+		$('#usermessage').html(msg.message);
+		$('.alert-warning').show();
+		// husky-koglhof
+		setTimeout(function() {
+			// $('.alert-warning').fade();
+		}, 3000);
 	});
 
 	// popup messaging

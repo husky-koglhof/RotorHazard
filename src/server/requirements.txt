@@ -15,3 +15,7 @@ monotonic==1.5.*
 pyserial==3.4.*
 paho-mqtt==1.5.*
 websocket-client==0.57.*
+Flask-Security-Too
+zxcvbn
+argon2_cffi
+python2-secrets==1.0.5

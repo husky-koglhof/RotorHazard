@@ -4,7 +4,9 @@
 		"ADMIN_USERNAME": "admin",
 		"ADMIN_PASSWORD": "rotorhazard",
 		"DEBUG": false,
-		"CORS_ALLOWED_HOSTS": "*"
+		"CORS_ALLOWED_HOSTS": "*",
+		"EXTENDED_AUTH": false,
+		"SALT": ""
 	},
 	"SENSORS": {
 	},

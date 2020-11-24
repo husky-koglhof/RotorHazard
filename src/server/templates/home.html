@@ -11,6 +11,14 @@
 				rotorhazard.interface_language = msg.language;
 			}
 		});
+
+		{% for message in get_flashed_messages() %}
+			interrupt_message_queue.push("{{ message }}");
+			if (interrupt_message_queue.length == 1) {
+				get_interrupt_message()
+			}
+		{% endfor %}
+
 	});
 </script>
 
@@ -25,6 +33,7 @@
 		{% endif %}
 	</h1>
 </div>
+
 
 <div class="panel">
 	<div class="panel-header">
@@ -45,10 +54,12 @@
 			<li><a class="button-like" href="/heats">{{ __("Event Heats and Classes") }}</a></li>
 			<li><a class="button-like" href="/results">{{ __("View Race Results") }}</a></li>
 			<li><a class="button-like" href="/current">{{ __("Spectate Current Race") }}</a></li>
-			<li><a class="button-like" href="/racemgmt">{{ __("Start Race") }}</a></li>
-			<li class="admin-hide"><a class="button-like" href="/race">{{ __("Run") }}</a></li>
-			<li class="admin-hide"><a class="button-like" href="/marshal">{{ __("Marshal Race Data") }}</a></li>
+			{% if user.is_authenticated and user.has_permission('admin-read') %}
+			<li><a class="button-like" href="/race">{{ __("Start Race") }}</a></li>
+			<li><a class="button-like" href="/marshal">{{ __("Marshal Race Data") }}</a></li>
 			<li><a class="button-like" href="/settings">{{ __("Admin / Settings") }}</a></li>
+			<li><a class="button-like" href="/administration">{{ __("User administration") }}</a></li>
+			{% endif %}
 		</ul>
 	</div>
 </div>
