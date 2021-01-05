@@ -1335,7 +1335,9 @@ jQuery(document).ready(function($){
 
 	// load needed data from server when required
 	socket.on('load_all', function (msg) {
-		socket.emit('load_data', {'load_types': data_dependencies});
+		if (typeof(data_dependencies) != "undefined") {
+			socket.emit('load_data', {'load_types': data_dependencies});
+		}
 	});
 
 	// store language strings
@@ -1602,6 +1604,14 @@ var freq = {
 		J1: 5695,
 		J2: 5770,
 		J3: 5880,
+		S1: 5660,
+		S2: 5695,
+		S3: 5735,
+		S4: 5770,
+		S5: 5805,
+		S6: 5878,
+		S7: 5914,
+		S8: 5839,
 		'N/A': 'n/a'
 	},
 	findByFreq: function(frequency) {

@@ -1,5 +1,5 @@
 '''RotorHazard server script'''
-RELEASE_VERSION = "2.3.0-dev.8" # Public release version code
+RELEASE_VERSION = "2.3.0" # Public release version code
 SERVER_API = 29 # Server API version
 NODE_API_SUPPORTED = 18 # Minimum supported node version
 NODE_API_BEST = 25 # Most recent node API
@@ -67,6 +67,7 @@ import RHUtils
 from RHUtils import catchLogExceptionsWrapper
 from Language import __
 from ClusterNodeSet import SlaveNode, ClusterNodeSet
+from util.SendAckQueue import SendAckQueue
 
 # Events manager
 from eventmanager import Evt, EventManager
@@ -136,6 +137,7 @@ Current_log_path_name = log.later_stage_setup(Config.LOGGING, SOCKET_IO)
 INTERFACE = None  # initialized later
 SENSORS = Sensors()
 CLUSTER = None    # initialized later
+ClusterSendAckQueueObj = None
 serverInfo = None
 serverInfoItems = None
 Use_imdtabler_jar_flag = False  # set True if IMDTabler.jar is available
@@ -500,12 +502,8 @@ def render_database():
 @APP.route('/vrxstatus')
 @requires_auth
 def render_vrxstatus():
-    '''Route to database page.'''
-    if vrx_controller:
-        return render_template('vrxstatus.html', serverInfo=serverInfo, getOption=Options.get, __=__,
-            vrxstatus=vrx_controller.rx_data)
-    else:
-        return False
+    '''Route to VRx status debug page.'''
+    return render_template('vrxstatus.html', serverInfo=serverInfo, getOption=Options.get, __=__)
 
 # Documentation Viewer
 
@@ -611,11 +609,22 @@ def on_reset_auto_calibration(data):
 
 # Cluster events
 
+def emit_cluster_msg_to_master(messageType, messagePayload, waitForAckFlag=True):
+    '''Emits cluster message to master timer.'''
+    global ClusterSendAckQueueObj
+    if not ClusterSendAckQueueObj:
+        ClusterSendAckQueueObj = SendAckQueue(20, SOCKET_IO, logger)
+    ClusterSendAckQueueObj.put(messageType, messagePayload, waitForAckFlag)
+
 def emit_join_cluster_response():
+    '''Emits 'join_cluster_response' message to master timer.'''
     payload = {
         'server_info': json.dumps(serverInfoItems)
     }
-    SOCKET_IO.emit('join_cluster_response', payload)
+    emit_cluster_msg_to_master('join_cluster_response', payload, False)
+
+def has_joined_cluster():
+    return True if ClusterSendAckQueueObj else False
 
 @SOCKET_IO.on('join_cluster')
 @catchLogExceptionsWrapper
@@ -656,6 +665,17 @@ def on_cluster_event_trigger(data):
     # special handling for LED Control via master timer
     elif 'effect' in evtArgs and led_manager.isEnabled():
         led_manager.setEventEffect(Evt.LED_MANUAL, evtArgs['effect'])
+
+@SOCKET_IO.on('cluster_message_ack')
+@catchLogExceptionsWrapper
+def on_cluster_message_ack(data):
+    ''' Received message acknowledgement from master. '''
+    if ClusterSendAckQueueObj:
+        messageType = str(data.get('messageType')) if data else None
+        messagePayload = data.get('messagePayload') if data else None
+        ClusterSendAckQueueObj.ack(messageType, messagePayload)
+    else:
+        logger.warn("Received 'on_cluster_message_ack' message with no ClusterSendAckQueueObj setup")
 
 # RotorHazard events
 
@@ -749,6 +769,11 @@ def on_set_frequency(data):
 
     profile = getCurrentProfile()
     freqs = json.loads(profile.frequencies)
+
+    # handle case where more nodes were added
+    while node_index >= len(freqs["f"]):
+        freqs["f"].append(RHUtils.FREQUENCY_ID_NONE)
+
     freqs["f"][node_index] = frequency
     profile.frequencies = json.dumps(freqs)
     logger.info('Frequency set: Node {0} Frequency {1}'.format(node_index+1, frequency))
@@ -802,6 +827,8 @@ def on_set_frequency_preset(data):
             freqs = [5658, 5695, 5760, 5800, 5885, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
         else: #IMD6C is default
             freqs = [5658, 5695, 5760, 5800, 5880, 5917, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
+        while RACE.num_nodes > len(freqs):
+            freqs.append(RHUtils.FREQUENCY_ID_NONE)
 
     set_all_frequencies(freqs)
     emit_frequency_data()
@@ -847,12 +874,21 @@ def on_set_enter_at_level(data):
     node_index = data['node']
     enter_at_level = data['enter_at_level']
 
+    if node_index < 0 or node_index >= RACE.num_nodes:
+        logger.info('Unable to set enter-at ({0}) on node {1}; node index out of range'.format(enter_at_level, node_index+1))
+        return
+
     if not enter_at_level:
         logger.info('Node enter-at set null; getting from node: Node {0}'.format(node_index+1))
         enter_at_level = INTERFACE.nodes[node_index].enter_at_level
 
     profile = getCurrentProfile()
     enter_ats = json.loads(profile.enter_ats)
+
+    # handle case where more nodes were added
+    while node_index >= len(enter_ats["v"]):
+        enter_ats["v"].append(None)
+
     enter_ats["v"][node_index] = enter_at_level
     profile.enter_ats = json.dumps(enter_ats)
     DB.session.commit()
@@ -873,12 +909,21 @@ def on_set_exit_at_level(data):
     node_index = data['node']
     exit_at_level = data['exit_at_level']
 
+    if node_index < 0 or node_index >= RACE.num_nodes:
+        logger.info('Unable to set exit-at ({0}) on node {1}; node index out of range'.format(exit_at_level, node_index+1))
+        return
+
     if not exit_at_level:
         logger.info('Node exit-at set null; getting from node: Node {0}'.format(node_index+1))
         exit_at_level = INTERFACE.nodes[node_index].exit_at_level
 
     profile = getCurrentProfile()
     exit_ats = json.loads(profile.exit_ats)
+
+    # handle case where more nodes were added
+    while node_index >= len(exit_ats["v"]):
+        exit_ats["v"].append(None)
+
     exit_ats["v"][node_index] = exit_at_level
     profile.exit_ats = json.dumps(exit_ats)
     DB.session.commit()
@@ -1063,34 +1108,37 @@ def on_alter_heat(data):
     race_list = Database.SavedRaceMeta.query.filter_by(heat_id=heat_id).all()
 
     if 'class' in data:
-        for race_meta in race_list:
-            race_meta.class_id = data['class']
-            # race_meta.cacheStatus=Results.CacheStatus.INVALID
+        if len(race_list):
+            for race_meta in race_list:
+                race_meta.class_id = data['class']
+                # race_meta.cacheStatus=Results.CacheStatus.INVALID
 
-        if old_class_id is not Database.CLASS_ID_NONE:
-            old_class = Database.RaceClass.query.get(old_class_id)
-            old_class.cacheStatus = Results.CacheStatus.INVALID
+            if old_class_id is not Database.CLASS_ID_NONE:
+                old_class = Database.RaceClass.query.get(old_class_id)
+                old_class.cacheStatus = Results.CacheStatus.INVALID
 
     if 'pilot' in data:
-        for race_meta in race_list:
-            for pilot_race in Database.SavedPilotRace.query.filter_by(race_id=race_meta.id).all():
-                if pilot_race.node_index == data['node']:
-                    pilot_race.pilot_id = data['pilot']
-            for race_lap in Database.SavedRaceLap.query.filter_by(race_id=race_meta.id).all():
-                if race_lap.node_index == data['node']:
-                    race_lap.pilot_id = data['pilot']
+        if len(race_list):
+            for race_meta in race_list:
+                for pilot_race in Database.SavedPilotRace.query.filter_by(race_id=race_meta.id).all():
+                    if pilot_race.node_index == data['node']:
+                        pilot_race.pilot_id = data['pilot']
+                for race_lap in Database.SavedRaceLap.query.filter_by(race_id=race_meta.id).all():
+                    if race_lap.node_index == data['node']:
+                        race_lap.pilot_id = data['pilot']
 
-            race_meta.cacheStatus = Results.CacheStatus.INVALID
+                race_meta.cacheStatus = Results.CacheStatus.INVALID
 
-        heat.cacheStatus = Results.CacheStatus.INVALID
+            heat.cacheStatus = Results.CacheStatus.INVALID
 
     if 'pilot' in data or 'class' in data:
-        if heat.class_id is not Database.CLASS_ID_NONE:
-            new_class = Database.RaceClass.query.get(heat.class_id)
-            new_class.cacheStatus = Results.CacheStatus.INVALID
+        if len(race_list):
+            if heat.class_id is not Database.CLASS_ID_NONE:
+                new_class = Database.RaceClass.query.get(heat.class_id)
+                new_class.cacheStatus = Results.CacheStatus.INVALID
 
-        Options.set("eventResults_cacheStatus", Results.CacheStatus.INVALID)
-        FULL_RESULTS_CACHE_VALID = False
+            Options.set("eventResults_cacheStatus", Results.CacheStatus.INVALID)
+            FULL_RESULTS_CACHE_VALID = False
 
     DB.session.commit()
 
@@ -1112,7 +1160,8 @@ def on_alter_heat(data):
 
     logger.info('Heat {0} altered with {1}'.format(heat_id, data))
     emit_heat_data(noself=True)
-    emit_result_data() # live update rounds page
+    if len(race_list):
+        emit_result_data() # live update rounds page
 
     if ('pilot' in data or 'class' in data) and Database.SavedRaceMeta.query.filter_by(heat_id=heat_id).first() is not None:
         message = __('Alterations made to heat: {0}').format(heat.note)
@@ -1357,8 +1406,9 @@ def on_alter_pilot(data):
             for heatnode in heatnodes:
                 heat = Database.Heat.query.get(heatnode.heat_id)
                 heat.cacheStatus = Results.CacheStatus.INVALID
-                race_class = Database.RaceClass.query.get(heat.class_id)
-                race_class.cacheStatus = Results.CacheStatus.INVALID
+                if heat.class_id != Database.CLASS_ID_NONE:
+                    race_class = Database.RaceClass.query.get(heat.class_id)
+                    race_class.cacheStatus = Results.CacheStatus.INVALID
                 races = Database.SavedRaceMeta.query.filter_by(heat_id=heatnode.heat_id)
                 for race in races:
                     race.cacheStatus = Results.CacheStatus.INVALID
@@ -1470,10 +1520,14 @@ def on_set_profile(data, emit_vals=True):
         # set freqs, enter_ats, and exit_ats
         freqs_loaded = json.loads(profile.frequencies)
         freqs = freqs_loaded["f"]
+        while RACE.num_nodes > len(freqs):
+            freqs.append(RHUtils.FREQUENCY_ID_NONE)
 
         if profile.enter_ats:
             enter_ats_loaded = json.loads(profile.enter_ats)
             enter_ats = enter_ats_loaded["v"]
+            while RACE.num_nodes > len(enter_ats):
+                enter_ats.append(None)
         else: #handle null data by copying in hardware values
             enter_at_levels = {}
             enter_at_levels["v"] = [node.enter_at_level for node in INTERFACE.nodes]
@@ -1484,6 +1538,8 @@ def on_set_profile(data, emit_vals=True):
         if profile.exit_ats:
             exit_ats_loaded = json.loads(profile.exit_ats)
             exit_ats = exit_ats_loaded["v"]
+            while RACE.num_nodes > len(exit_ats):
+                exit_ats.append(None)
         else: #handle null data by copying in hardware values
             exit_at_levels = {}
             exit_at_levels["v"] = [node.exit_at_level for node in INTERFACE.nodes]
@@ -2113,6 +2169,7 @@ def on_get_pi_time():
 def on_stage_race():
     global RACE
     valid_pilots = False
+    heat_data = Database.Heat.query.get(RACE.current_heat)
     heatNodes = Database.HeatNode.query.filter_by(heat_id=RACE.current_heat).all()
     for heatNode in heatNodes:
         if heatNode.node_index < RACE.num_nodes:
@@ -2126,12 +2183,12 @@ def on_stage_race():
     CLUSTER.emitToSplits('stage_race')
     race_format = getCurrentRaceFormat()
 
-    # if running as slave timer and missed stop/discard msg then stop/clear current race
     if RACE.race_status != RaceStatus.READY:
-        if race_format is SLAVE_RACE_FORMAT:
-            logger.info("Forcing race clear/restart because running as slave timer")
+        if race_format is SLAVE_RACE_FORMAT:  # if running as slave timer
             if RACE.race_status == RaceStatus.RACING:
-                on_stop_race()
+                return  # if race in progress then leave it be
+            # if missed stop/discard message then clear current race
+            logger.info("Forcing race clear/restart because running as slave timer")
             on_discard_laps()
         elif RACE.race_status == RaceStatus.DONE and not RACE.any_laps_recorded():
             on_discard_laps()  # if no laps then allow restart
@@ -2142,6 +2199,14 @@ def on_stage_race():
         INTERFACE.enable_calibration_mode() # Nodes reset triggers on next pass
 
         trigger_event(Evt.RACE_STAGE)
+
+        if heat_data.class_id != Database.CLASS_ID_NONE:
+            class_format_id = Database.RaceClass.query.get(heat_data.class_id).format_id
+            if class_format_id != Database.FORMAT_ID_NONE:
+                class_format = Database.RaceFormat.query.get(class_format_id)
+                setCurrentRaceFormat(class_format)
+                logger.info("Forcing race format from class setting: '{0}' ({1})".format(class_format.name, class_format_id))
+
         clear_laps() # Clear laps before race start
         init_node_cross_fields()  # set 'cur_pilot_id' and 'cross' fields on nodes
         RACE.last_race_cacheStatus = Results.CacheStatus.INVALID # invalidate last race results cache
@@ -2163,6 +2228,7 @@ def on_stage_race():
         emit_current_laps() # Race page, blank laps to the web client
         emit_current_leaderboard() # Race page, blank leaderboard to the web client
         emit_race_status()
+        emit_race_format()
         check_emit_race_status_message(RACE) # Update race status message
 
         MIN = min(race_format.start_delay_min, race_format.start_delay_max) # in case values are reversed
@@ -2882,6 +2948,15 @@ def on_set_current_heat(data):
         else:
             RACE.node_teams[heatNode.node_index] = None
 
+    heat_data = Database.Heat.query.get(new_heat_id)
+
+    if heat_data.class_id != Database.CLASS_ID_NONE:
+        class_format_id = Database.RaceClass.query.get(heat_data.class_id).format_id
+        if class_format_id != Database.FORMAT_ID_NONE:
+            class_format = Database.RaceFormat.query.get(class_format_id)
+            setCurrentRaceFormat(class_format)
+            logger.info("Forcing race format from class setting: '{0}' ({1})".format(class_format.name, class_format_id))
+
     logger.info('Current heat set: Heat {0}'.format(new_heat_id))
 
     if Options.getInt('calibrationMode'):
@@ -2894,6 +2969,7 @@ def on_set_current_heat(data):
     RACE.cacheStatus = Results.CacheStatus.INVALID  # refresh leaderboard
     emit_current_heat() # Race page, to update heat selection button
     emit_current_leaderboard() # Race page, to update callsigns in leaderboard
+    emit_race_format()
     check_emit_race_status_message(RACE) # Update race status message
 
 @SOCKET_IO.on('generate_heats')
@@ -4109,7 +4185,7 @@ def emit_pass_record(node, lap_time_stamp):
         'frequency': node.frequency,
         'timestamp': lap_time_stamp + RACE.start_time_epoch_ms
     }
-    SOCKET_IO.emit('pass_record', payload)
+    emit_cluster_msg_to_master('pass_record', payload)
 
 #
 # Program Functions
@@ -4214,8 +4290,9 @@ def clock_check_thread_function():
                 # update values that will be reported if running as cluster timer
                 serverInfoItems['prog_start_epoch'] = "{0:.0f}".format(PROGRAM_START_EPOCH_TIME)
                 serverInfoItems['prog_start_time'] = str(datetime.utcfromtimestamp(PROGRAM_START_EPOCH_TIME/1000.0))
-                logger.debug("Emitting 'join_cluster_response' message with updated 'prog_start_epoch'")
-                emit_join_cluster_response()
+                if has_joined_cluster():
+                    logger.debug("Emitting 'join_cluster_response' message with updated 'prog_start_epoch'")
+                    emit_join_cluster_response()
     except KeyboardInterrupt:
         logger.info("clock_check_thread terminated by keyboard interrupt")
         raise
@@ -4317,8 +4394,8 @@ def pass_record_callback(node, lap_timestamp_absolute, source):
 
                     if lap_ok_flag:
 
-                        # emit 'pass_record' message (via thread to make sure we're not blocked)
-                        gevent.spawn(emit_pass_record, node, lap_time_stamp)
+                        # emit 'pass_record' message (to master timer in cluster, livetime, etc).
+                        emit_pass_record(node, lap_time_stamp)
 
                         # Add the new lap to the database
                         RACE.node_laps[node.index].append({
@@ -4350,14 +4427,15 @@ def pass_record_callback(node, lap_timestamp_absolute, source):
                             lap_number += 1
 
                         # announce lap
-                        if RACE.format.team_racing_mode:
-                            team = Database.Pilot.query.get(pilot_id).team
-                            team_data = RACE.team_results['meta']['teams'][team]
-                            emit_phonetic_data(pilot_id, lap_number, lap_time, team, team_data['laps'])
-                        else:
-                            emit_phonetic_data(pilot_id, lap_number, lap_time, None, None)
+                        if lap_number > 0:
+                            if RACE.format.team_racing_mode:
+                                team = Database.Pilot.query.get(pilot_id).team
+                                team_data = RACE.team_results['meta']['teams'][team]
+                                emit_phonetic_data(pilot_id, lap_number, lap_time, team, team_data['laps'])
+                            else:
+                                emit_phonetic_data(pilot_id, lap_number, lap_time, None, None)
 
-                        check_win_condition(RACE, INTERFACE) # check for and announce winner
+                            check_win_condition(RACE, INTERFACE) # check for and announce winner
 
                     else:
                         # record lap as 'deleted'
@@ -4393,7 +4471,7 @@ def check_win_condition(RACE, INTERFACE, **kwargs):
             if race_format.team_racing_mode:
                 RACE.status_message = __('Winner is') + ' ' + __('Team') + ' ' + win_status['data']['name']
                 emit_race_status_message()
-                emit_phonetic_text(RACE.status_message)
+                emit_phonetic_text(RACE.status_message, 'race_winner')
             else:
                 RACE.status_message = __('Winner is') + ' ' + win_status['data']['callsign']
                 emit_race_status_message()
@@ -4471,6 +4549,8 @@ def default_frequencies():
         freqs = [5658, 5732, 5843, 5880, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
     else:
         freqs = [5658, 5695, 5760, 5800, 5880, 5917, RHUtils.FREQUENCY_ID_NONE, RHUtils.FREQUENCY_ID_NONE]
+        while RACE.num_nodes > len(freqs):
+            freqs.append(RHUtils.FREQUENCY_ID_NONE)
     return freqs
 
 def assign_frequencies():
@@ -4578,7 +4658,7 @@ def db_reset_profile():
     new_freqs["f"] = default_frequencies()
 
     template = {}
-    template["v"] = [None, None, None, None, None, None, None, None]
+    template["v"] = [None for i in range(max(RACE.num_nodes,8))]
 
     DB.session.add(Database.Profiles(name=__("Default"),
                              frequencies = json.dumps(new_freqs),
@@ -5013,8 +5093,8 @@ def recover_database(dbfile, **kwargs):
             restore_table(Database.Profiles, profiles_query_data, defaults={
                     'name': __("Migrated Profile"),
                     'frequencies': json.dumps(default_frequencies()),
-                    'enter_ats': json.dumps({'v': [None, None, None, None, None, None, None, None]}),
-                    'exit_ats': json.dumps({'v': [None, None, None, None, None, None, None, None]})
+                    'enter_ats': json.dumps({'v': [None for i in range(max(RACE.num_nodes,8))]}),
+                    'exit_ats': json.dumps({'v': [None for i in range(max(RACE.num_nodes,8))]})
                 })
             restore_table(Database.RaceClass, raceClass_query_data, defaults={
                     'name': 'New class',
@@ -5225,7 +5305,7 @@ logger.info("Using log file: {0}".format(Current_log_path_name))
 hardwareHelpers = {}
 for helper in search_modules(suffix='helper'):
     try:
-        hardwareHelpers[helper.__name__] = helper.create()
+        hardwareHelpers[helper.__name__] = helper.create(Config)
     except Exception as ex:
         logger.warn("Unable to create hardware helper '{0}':  {1}".format(helper.__name__, ex))
 
